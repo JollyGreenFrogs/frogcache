@@ -14,10 +14,12 @@ use `docker --context`** (see `deploy/deploy.sh`).
 
 ## License
 
-frogcache is open source under **CC BY-NC-SA 4.0 — no commercial reuse**
-([LICENSE](LICENSE)). By contributing, you agree that your contribution is
+frogcache is **source-available** under **CC BY-NC-SA 4.0 — no commercial
+reuse** ([LICENSE](LICENSE); the NonCommercial clause means it is not OSI
+"open source"). By contributing, you agree that your contribution is
 licensed to the project and its users under CC BY-NC-SA 4.0 (copyright stays
-with you; no CLA transfer). Cached third-party artifacts (`seed/wheels/`,
+with you; no CLA transfer) — so commercial reuse needs permission from the
+relevant copyright holders, not just the maintainers. Cached third-party artifacts (`seed/wheels/`,
 upstream downloads) are not covered and keep their own upstream licenses.
 
 ## What counts as a contribution

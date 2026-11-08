@@ -4,10 +4,10 @@
 
 Only the latest commit on `main` of `frogcache` receives security fixes.
 
-| Version | Supported |
-| ------- | --------- |
-| latest on `main` | ✅ |
-| older   | ❌        |
+Version | Supported
+------- | ---------
+latest on `main` | yes
+older | no
 
 ## Reporting a Vulnerability
 

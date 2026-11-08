@@ -6,7 +6,7 @@
 #   1. create the named volumes
 #   2. seed volumes via a throwaway container + `docker cp`
 #      (seed/wheels -> frogcache-files, seed/artifacts.json -> frogcache-artifacts)
-#   3. idempotent ntfy publisher setup (user frogcache, topic frogcache-updates,
+#   3. idempotent ntfy publisher setup (user frogcache, topic $NTFY_TOPIC,
 #      token) and write the token into the frogcache-secrets volume (mode 600)
 #   4. ensure the updater image exists on the host (pull; build+push locally if missing)
 #   5. docker compose up -d
@@ -19,6 +19,7 @@
 #          UPDATER_IMAGE  updater image, e.g. <registry>/frogcache/updater:latest
 # Env (optional):
 #          NTFY_TOPIC_URL default http://$CACHE_HOST:8090/frogcache-updates
+#          NTFY_TOPIC     topic name, derived from NTFY_TOPIC_URL if unset
 #          NTFY_CONTAINER ntfy container name on the host (default: ntfy)
 set -euo pipefail
 
@@ -30,6 +31,10 @@ ROOT="$(dirname "$HERE")"
 D=(docker --context "$CONTEXT")
 CACHE_URL="http://${CACHE_HOST}:8091/"
 NTFY_TOPIC_URL="${NTFY_TOPIC_URL:-http://${CACHE_HOST}:8090/frogcache-updates}"
+# ACL topic must match the topic in the URL, otherwise the publisher token
+# would be saved but denied access on a deny-by-default ntfy server.
+NTFY_TOPIC="${NTFY_TOPIC:-$(basename "${NTFY_TOPIC_URL%/}")}"
+[[ -n "$NTFY_TOPIC" ]] || { echo "ERROR: cannot derive ntfy topic from NTFY_TOPIC_URL='$NTFY_TOPIC_URL'" >&2; exit 1; }
 NTFY_CONTAINER="${NTFY_CONTAINER:-ntfy}"
 
 VOLUMES=(frogcache-files frogcache-artifacts frogcache-data frogcache-secrets)
@@ -60,7 +65,7 @@ setup_ntfy_publisher() {
         pw="$(openssl rand -hex 24)"
         printf '%s\n%s\n' "$pw" "$pw" | "${D[@]}" exec -i "$NTFY_CONTAINER" ntfy user add frogcache >/dev/null
     fi
-    "${D[@]}" exec "$NTFY_CONTAINER" ntfy access frogcache frogcache-updates write-only >/dev/null
+    "${D[@]}" exec "$NTFY_CONTAINER" ntfy access frogcache "$NTFY_TOPIC" write-only >/dev/null
     local token
     token="$("${D[@]}" exec "$NTFY_CONTAINER" ntfy token add frogcache | grep -o 'tk_[A-Za-z0-9]*' | head -1)"
     if [[ -z "$token" ]]; then

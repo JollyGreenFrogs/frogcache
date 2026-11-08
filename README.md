@@ -13,7 +13,7 @@ and github.com release downloads once 504'd and failed CI. Design:
 > This repo is public — it contains **no internal hostnames, IPs, or project
 > names**. Deploy it with your own values (see [Deploy](#deploy--no-ssh-docker-context-only)).
 
-**License: [CC BY-NC-SA 4.0](LICENSE) — open source, no commercial reuse.**
+**License: [CC BY-NC-SA 4.0](LICENSE) — source-available, no commercial reuse.**
 **Co-authored by humans and AI** — see [Authorship](#authorship--human--ai-co-creation).
 
 ## Layout
@@ -50,9 +50,9 @@ hardcoded in this repo):
 
 ```bash
 cd deploy
-CONTEXT=<docker-context> \
-CACHE_HOST=<lan-host-or-ip> \
-UPDATER_IMAGE=<registry>/frogcache/updater:latest \
+export CONTEXT=<docker-context> \
+       CACHE_HOST=<lan-host-or-ip> \
+       UPDATER_IMAGE=<registry>/frogcache/updater:latest
 ./deploy.sh        # seeds volumes, sets up ntfy publisher, ensures image, compose up, verifies
 curl -s "http://$CACHE_HOST:8091/" | grep -o 'en_core_web_sm[^"<]*'
 ```
@@ -120,8 +120,11 @@ wheel; content identical — reference by name.)
 
 frogcache code and documentation are licensed under
 **CC BY-NC-SA 4.0** — free to use, share, and adapt for **non-commercial**
-purposes with attribution and share-alike. **Commercial reuse is not
-permitted** without separate written permission from the maintainers.
+purposes with attribution and share-alike (ShareAlike applies only to shared
+adaptations). Because of the NonCommercial clause this is **source-available,
+not OSI "open source"**. **Commercial reuse is not permitted** without
+separate written permission from the relevant copyright holders (contributors
+retain their copyright).
 See [LICENSE](LICENSE). Cached third-party artifacts (e.g. `seed/wheels/`)
 are not covered — they keep their upstream licenses (spaCy models are
 Apache-2.0).
