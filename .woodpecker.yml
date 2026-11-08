@@ -1,0 +1,28 @@
+# Woodpecker CI for frogcache (house rule: Woodpecker only, no GitHub Actions).
+# - every push/PR: byte-compile gate + unit tests
+# - push to main: build the updater image and push it to the private registry
+#   on frost (10.0.27.50:5005, secret `docker_registry`), where deploy/ pulls it.
+when:
+  event: [push, pull_request]
+
+steps:
+  - name: test
+    image: python:3.13-alpine
+    commands:
+      - pip install --quiet pytest
+      - python -m compileall -q src tests
+      - PYTHONPATH=src python -m pytest -q
+
+  - name: docker-build-push
+    image: docker:cli
+    when:
+      event: push
+      branch: main
+    environment:
+      REGISTRY: { from_secret: docker_registry }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - docker build -t $REGISTRY/frogcache/updater:latest -t $REGISTRY/frogcache/updater:${CI_COMMIT_SHA:0:8} .
+      - docker push $REGISTRY/frogcache/updater:latest
+      - docker push $REGISTRY/frogcache/updater:${CI_COMMIT_SHA:0:8}

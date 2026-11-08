@@ -1,0 +1,13 @@
+{
+  "artifacts": [
+    {
+      "name": "en-core-web-sm",
+      "source": {
+        "type": "github-compat",
+        "repo": "explosion/spacy-models",
+        "branch": "master",
+        "file_pattern": "en_core_web_sm-{version}-py3-none-any.whl"
+      }
+    }
+  ]
+}
