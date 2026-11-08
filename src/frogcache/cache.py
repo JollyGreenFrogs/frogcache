@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import urllib.request
 from pathlib import Path
 
@@ -78,8 +79,9 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
         RuntimeError: on download failure (temp file is removed).
     """
     dest_dir = Path(cache_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    tmp = dest_dir / f".{filename}.part"
+    dest = dest_dir / filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".{dest.name}.part"
     request = urllib.request.Request(url, headers={"User-Agent": "frogcache/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
@@ -87,7 +89,6 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
             while chunk := response.read(1 << 20):
                 digest.update(chunk)
                 out.write(chunk)
-        dest = dest_dir / filename
         os.replace(tmp, dest)
         return dest, digest.hexdigest()
     except Exception as err:
@@ -151,3 +152,48 @@ def is_update_available(latest_version: str, cache_dir: str, name: str) -> bool:
     """Return True if latest_version is newer than the newest cached version."""
     cached = newest_cached_version(cache_dir, name)
     return cached is None or is_newer(latest_version, cached)
+
+
+def record_fetch_multi(
+    manifest: dict,
+    name: str,
+    version: str,
+    files: list[tuple[str, str]],
+    source: str,
+    keep: int,
+    fetched_at: str,
+) -> None:
+    """Append one manifest entry per downloaded file and prune old versions (multi-file fetch).
+
+    Used for HuggingFace model fetches (ADR-002): one fetch = many files sharing
+    one version (revision sha). Entries of versions older than the newest `keep`
+    versions are dropped.
+
+    Args:
+        manifest: manifest dict (mutated).
+        name: artifact name.
+        version: version (revision sha) all files belong to.
+        files: [(filename, sha256)] pairs to record.
+        source: source type label.
+        keep: number of newest versions to retain.
+        fetched_at: ISO-8601 UTC timestamp for the new entries.
+    """
+    entries = manifest["artifacts"].setdefault(name, [])
+    for filename, sha256 in files:
+        entries.append(
+            {
+                "version": version,
+                "filename": filename,
+                "sha256": sha256,
+                "source": source,
+                "url": "",
+                "fetched_at": fetched_at,
+            }
+        )
+    versions = sorted(
+        {e["version"] for e in entries},
+        key=lambda v: max(e["fetched_at"] for e in entries if e["version"] == v),
+        reverse=True,
+    )
+    drop = set(versions[keep:])
+    manifest["artifacts"][name] = [e for e in entries if e["version"] not in drop]

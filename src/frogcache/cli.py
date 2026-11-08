@@ -14,11 +14,54 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from frogcache import cache, upstream
+from frogcache import cache, hf, upstream
 from frogcache.config import load_config
 from frogcache.data_models.artifact import ManifestEntry
 from frogcache.data_models.config import Config
 from frogcache.notify import notify_safe
+
+
+def check_hf_artifact(config: Config, spec) -> str:
+    """Check one HuggingFace model: download all matching files if the revision is new.
+
+    Files land under hf/<repo>/<revision-sha>/ (ADR-002); retention keeps the
+    newest RETAIN revisions. Returns a report line; raises RuntimeError on
+    upstream/download failure.
+
+    Args:
+        config: runtime config.
+        spec: ArtifactSpec with source.type == 'huggingface'.
+    Returns:
+        Report line ('updated ...', 'up to date ...', 'no files found upstream').
+    Raises:
+        RuntimeError: if the upstream check or a download fails.
+    """
+    release = hf.latest_hf_release(spec, config.http_timeout)
+    if release is None:
+        return f"{spec.name}: no files found upstream"
+    cached = hf.cached_hf_versions(config.cache_dir, spec.source.repo)
+    if cached and cached[0] == release.version:
+        return f"{spec.name}: up to date ({release.version[:12]})"
+    dest = cache.hf_dir(config.cache_dir, spec.source.repo, release.version)
+    downloaded = []
+    for path, url in release.files:
+        _, sha256 = cache.download_atomic(url, str(dest), path, config.http_timeout)
+        downloaded.append((f"hf/{spec.source.repo}/{release.version}/{path}", sha256))
+    removed = cache.apply_hf_retention(config.cache_dir, spec.source.repo, config.retain)
+    manifest = cache.load_manifest(config.state_file)
+    cache.record_fetch_multi(
+        manifest,
+        spec.name,
+        release.version,
+        downloaded,
+        spec.source.type,
+        config.retain,
+        datetime.now(timezone.utc).isoformat(),
+    )
+    cache.save_manifest(config.state_file, manifest)
+    before = cached[0][:12] if cached else "none"
+    note = f" (pruned {', '.join(v[:12] for v in removed)})" if removed else ""
+    return f"{spec.name}: updated {before} -> {release.version[:12]} ({len(downloaded)} files){note}"
 
 
 def check_artifact(config: Config, spec) -> str:
@@ -32,6 +75,8 @@ def check_artifact(config: Config, spec) -> str:
     Raises:
         RuntimeError: if the upstream check or download fails.
     """
+    if spec.source.type == "huggingface":
+        return check_hf_artifact(config, spec)
     release = upstream.latest_release(spec, config.github_token, config.http_timeout)
     if release is None:
         return f"{spec.name}: no upstream release found"

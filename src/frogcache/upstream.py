@@ -6,6 +6,7 @@ Sources (SourceSpec.type):
                      rate-limited like api.github.com); download URL constructed
                      from the release tag '<underscore_name>-<version>'.
   - github-releases: api.github.com release tags/assets (optional GITHUB_TOKEN).
+  - huggingface:     HF model repo files at a revision (see hf.py, ADR-002).
 
 Governing ADR: docs/decisions/ADR-001.
 """
@@ -74,6 +75,8 @@ def load_artifacts(path: str) -> list[ArtifactSpec]:
             repo=entry["source"].get("repo", ""),
             branch=entry["source"].get("branch", "master"),
             file_pattern=entry["source"].get("file_pattern", ""),
+            revision=entry["source"].get("revision", "main"),
+            files=tuple(entry["source"].get("files", [])),
         )
         source.validate()
         specs.append(ArtifactSpec(name=entry["name"], source=source))
@@ -198,4 +201,6 @@ def latest_release(spec: ArtifactSpec, github_token: str = "", timeout: int = 60
         return latest_pypi_release(spec, timeout)
     if spec.source.type == "github-compat":
         return latest_compat_release(spec, timeout)
+    if spec.source.type == "huggingface":
+        raise ValueError("huggingface sources are multi-file: use frogcache.hf (ADR-002)")
     return latest_github_release(spec, github_token, timeout)
