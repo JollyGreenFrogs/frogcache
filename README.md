@@ -86,6 +86,34 @@ Source types: `pypi` (PyPI JSON, wheel preferred), `github-compat`
 `github-releases` (api.github.com; set `GITHUB_TOKEN` in the secrets file if
 the 60/hr unauthenticated limit is exhausted).
 
+## LLM models (HuggingFace)
+
+frogcache can also host HF model files, so consumers never need
+huggingface.co. Add a `huggingface` source — `repo` is `org/model`,
+`revision` is a branch/tag/commit (default `main`), `files` is an optional
+list of glob patterns (default: all files in the repo):
+
+```json
+{ "name": "qwen3-8b",
+  "source": { "type": "huggingface", "repo": "Qwen/Qwen3-8B-GGUF",
+              "revision": "main",
+              "files": ["qwen3-8b-q4_k_m-*.gguf", "config.json"] } }
+```
+
+Files are cached under `hf/<org>/<model>/<revision-sha>/…` (design:
+[docs/decisions/ADR-002-hf-model-hosting.md](docs/decisions/ADR-002-hf-model-hosting.md))
+and served by the same index:
+
+```bash
+curl -OJ "http://<cache-host>:8091/hf/Qwen/Qwen3-8B-GGUF/<revision-sha>/qwen3-8b-q4_k_m.gguf"
+```
+
+The revision sha is listed in the index and recorded in `/data/manifest.json`
+with per-file sha256. Retention keeps the newest `RETAIN=2` **revisions** per
+model — rollback = point consumers at the previous sha's files. For offline
+`huggingface_hub` usage, sync the `hf/` tree into `HF_HOME` and set
+`HF_HUB_OFFLINE=1`.
+
 ## Retention & updates
 
 Every `CHECK_INTERVAL_SECONDS` (default **604800 = weekly**) the updater:
