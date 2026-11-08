@@ -22,7 +22,7 @@ Facts and constraints:
   on the LAN host goes through `docker --context <name>` (exec/cp/volume/compose).
   No host bind paths from client machines; content lives in named docker
   volumes seeded via a throwaway container + `docker cp`.
-- The LAN server (Unraid) already runs ntfy (host port **8090**) and a private
+- The LAN server (a NAS) already runs ntfy (host port **8090**) and a private
   docker registry (host port **5005**), plus monitoring and other services.
   (Hostnames/IPs are deliberately not recorded in this public repo — pass them
   via env, see `deploy/deploy.sh`.)
