@@ -3,6 +3,8 @@ name = "frogcache"
 version = "0.1.0"
 description = "Self-hosted LAN artifact cache with weekly upstream auto-update and latest+latest-1 retention"
 requires-python = ">=3.11"
+license = "CC-BY-NC-SA-4.0"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
