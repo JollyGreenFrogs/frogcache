@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-08
 **Status:** Proposed
-**Area:** frogcache / <redacted-host> / CI dependency resilience
+**Area:** frogcache / LAN deployment / CI dependency resilience
 
 ---
 
@@ -10,8 +10,8 @@
 
 Some dependencies are **not on PyPI** — spaCy language models (e.g.
 `en-core-web-sm==3.8.0`) exist only as GitHub release wheels on
-`explosion/spacy-models`. Direct GitHub URLs made <redacted-project> CI fail when github.com
-release downloads 504'd (<redacted-project> PR #115, pipeline 444). We want those artifacts
+`explosion/spacy-models`. Direct GitHub URLs made an internal project's CI
+fail when github.com release downloads 504'd. We want those artifacts
 cached on the LAN so builds never touch github.com — and kept **current
 automatically**, retaining the latest and latest-1 files per artifact for
 rollback, instead of only being told that an update exists.
@@ -19,11 +19,13 @@ rollback, instead of only being told that an update exists.
 Facts and constraints:
 
 - **House rule #1 (operator, 2026-11-08): never SSH into servers.** Everything
-  on <redacted-host> goes through `docker --context <redacted-host>` (exec/cp/volume/compose). No
-  host bind paths from client machines; content lives in named docker volumes
-  seeded via a throwaway container + `docker cp`.
-- <redacted-host> (<redacted-ip>, <redacted-nas>) already runs ntfy (host port **8090**), pypiserver
-  (8085), a private docker registry (<redacted-ip>:5005), grafana/loki, zammad.
+  on the LAN host goes through `docker --context <name>` (exec/cp/volume/compose).
+  No host bind paths from client machines; content lives in named docker
+  volumes seeded via a throwaway container + `docker cp`.
+- The LAN server (a NAS) already runs ntfy (host port **8090**) and a private
+  docker registry (host port **5005**), plus monitoring and other services.
+  (Hostnames/IPs are deliberately not recorded in this public repo — pass them
+  via env, see `deploy/deploy.sh`.)
 - Consumers use `--find-links` / `tool.uv.find-links`, which need a **flat HTML
   page of links** — nginx autoindex provides it.
 - Secrets live only in docker volumes / env — never in git, never on host
@@ -37,13 +39,14 @@ Facts and constraints:
 
 ## Design
 
-Two containers from `deploy/docker-compose.yml`, deployed on <redacted-host> via
+Two containers from `deploy/docker-compose.yml`, deployed on the LAN host via
 `deploy/deploy.sh` (docker context only):
 
 ```
 cache    nginx:alpine, host network, port 8091 (8090 = ntfy), autoindex over
-         the frogcache-files volume        -> http://<redacted-ip>:8091/
-updater  image built by Woodpecker from this repo, pushed to <redacted-ip>:5005
+         the frogcache-files volume        -> http://<cache-host>:8091/
+updater  image built by Woodpecker from this repo, pushed to the private
+         registry on the host (:5005)
          (deploy.sh builds+pushes it locally if the registry copy is missing)
 ```
 
@@ -71,10 +74,10 @@ The served index needs no restart after downloads (autoindex lists per request).
 
 ## Decision
 
-We will build **frogcache** as its own repo: an nginx autoindex cache on <redacted-host>
-at **http://<redacted-ip>:8091/** plus a weekly updater container that
+We will build **frogcache** as its own repo: an nginx autoindex cache on the
+LAN host at **http://<cache-host>:8091/** plus a weekly updater container that
 **auto-downloads** newer upstream versions and **retains latest + latest-1**,
-deployed and operated **only via `docker --context <redacted-host>`**.
+deployed and operated **only via `docker --context <name>`**.
 
 **Rationale:** nothing off-the-shelf covers "watch upstream → auto-download →
 retain latest N → serve flat find-links" for arbitrary files (see rejected
@@ -90,7 +93,7 @@ gate in Woodpecker) and runs anywhere.
   with "retain last N versions" cleanup policies, but heavyweight (Java, GBs of
   RAM) for a NAS, and oriented to Maven/registry formats rather than a flat
   `--find-links` page. Harbor's retention is container-images only.
-- **pypiserver (already on <redacted-host>:8085) / devpi** — PEP 503 indexes with
+- **pypiserver / devpi** — PEP 503 indexes with
   upload/auth flows; not a flat links page, and no auto-update/retention of
   non-PyPI files.
 - **git-pkgs/proxy** — pull-through caching proxy for package registries; caches
@@ -100,22 +103,22 @@ gate in Woodpecker) and runs anywhere.
 - **changedetection.io** — watches web pages (incl. GitHub release Atom feeds)
   and can notify via ntfy, but cannot download/retain files or compare versions.
 - **Renovate `github-releases` datasource** — opens PRs in consumer repos; a
-  good complement for the <redacted-project> flip, not a cache.
+  good complement for flipping consumers to the cache, not a cache itself.
 - **Cron daemon in the updater container (Ofelia/Supercronic/crond)** — a
   sleep-loop in the long-running container is simpler and cannot silently stop
   firing; weekly cadence is `CHECK_INTERVAL_SECONDS=604800`.
 
 ## Consequences
 
-- <redacted-project> CI/Dockerfiles point at `http://<redacted-ip>:8091/` with plain names +
-  find-links and never touch github.com for these artifacts (<redacted-project>-side change,
-  separate repo).
+- Consumer CI/Dockerfiles point at `http://<cache-host>:8091/` with plain names
+  + find-links and never touch github.com for these artifacts (consumer-side
+  change, separate repo).
 - Cache stays current automatically; rollback = point consumers at the
   latest-1 wheel still present in the index; manifest.json records sha256 of
   every fetch.
 - Adding an artifact = new entry in `seed/artifacts.json` + `./deploy.sh`.
-- ntfy topic `frogcache-updates` on <redacted-host>:8090 carries update/failure alerts;
-  subscribe as `<redacted-user>`.
+- ntfy topic `frogcache-updates` on the host's ntfy (port 8090) carries
+  update/failure alerts.
 - LAN-only, unauthenticated on 8091 — acceptable for a read-only artifact
   mirror on the trusted LAN; sha256s in the manifest are the integrity check.
 

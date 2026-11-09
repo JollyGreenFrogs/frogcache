@@ -1,14 +1,15 @@
 # frogcache — self-hosted LAN artifact cache with weekly auto-update.
 #
-#   cache    nginx autoindex over the frogcache-files volume  -> http://<redacted-ip>:8091/
-#   updater  frogcache image (built by Woodpecker, pushed to <redacted-ip>:5005):
+#   cache    nginx autoindex over the frogcache-files volume  -> http://<cache-host>:8091/
+#   updater  frogcache image (built by Woodpecker, pushed to your registry):
 #            weekly checks upstream per seed artifact, downloads newer versions
 #            into frogcache-files, retains latest + latest-1 (RETAIN=2), ntfy notify.
 #
-# PORT NOTE: 8090 is taken by <redacted-host>'s ntfy container, hence 8091.
+# PORT NOTE: 8090 is commonly taken on the host (e.g. by ntfy), hence 8091.
 #
-# NO-SSH RULE: deploy/operate ONLY via `docker --context <redacted-host> ...` (deploy.sh).
+# NO-SSH RULE: deploy/operate ONLY via `docker --context <name> ...` (deploy.sh).
 # No host bind paths — everything lives in named volumes.
+# UPDATER_IMAGE is required (no default): set it to your registry image.
 #
 # Governing ADR: docs/decisions/ADR-001-frogcache.md (in this repo).
 services:
@@ -16,7 +17,7 @@ services:
     image: nginx:alpine
     container_name: frogcache
     restart: unless-stopped
-    network_mode: host          # serves on <redacted-host>'s LAN IP: http://<redacted-ip>:8091/
+    network_mode: host          # serves on the host LAN IP: http://<cache-host>:8091/
     volumes:
       - frogcache-files:/usr/share/nginx/html:ro
     command: >
@@ -29,7 +30,7 @@ services:
       retries: 3
 
   updater:
-    image: ${UPDATER_IMAGE:-<redacted-ip>:5005/frogcache/updater:latest}
+    image: ${UPDATER_IMAGE:?set UPDATER_IMAGE to your registry image, e.g. <registry>/frogcache/updater:latest}
     container_name: frogcache-updater
     restart: unless-stopped
     depends_on:

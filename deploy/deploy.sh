@@ -1,29 +1,41 @@
 #!/usr/bin/env bash
-# deploy.sh — deploy frogcache to <redacted-host> WITHOUT ssh: every operation goes
-# through the `<redacted-host>` docker context (house rule #1: never ssh into servers).
+# deploy.sh — deploy frogcache WITHOUT ssh: every operation goes through the
+# docker context named by $CONTEXT (rule #1: never ssh into servers).
 #
 # Steps:
 #   1. create the named volumes
 #   2. seed volumes via a throwaway container + `docker cp`
 #      (seed/wheels -> frogcache-files, seed/artifacts.json -> frogcache-artifacts)
-#   3. idempotent ntfy publisher setup (user frogcache, topic frogcache-updates,
+#   3. idempotent ntfy publisher setup (user frogcache, topic $NTFY_TOPIC,
 #      token) and write the token into the frogcache-secrets volume (mode 600)
-#   4. ensure the updater image exists on <redacted-host> (pull; build+push locally if missing)
+#   4. ensure the updater image exists on the host (pull; build+push locally if missing)
 #   5. docker compose up -d
 #   6. verify the index serves the seeded wheel
 #
-# Usage:   ./deploy.sh            (run from deploy/; CONTEXT=<redacted-host> default)
-# Env:     CONTEXT       docker context to deploy to (default: <redacted-host>)
-#          UPDATER_IMAGE image for the updater (default: <redacted-ip>:5005/frogcache/updater:latest)
+# Usage:   ./deploy.sh            (run from deploy/)
+# Env (required — no internal hosts are hardcoded in this public repo):
+#          CONTEXT        docker context name for the LAN host
+#          CACHE_HOST     host/IP the cache index is served on
+#          UPDATER_IMAGE  updater image, e.g. <registry>/frogcache/updater:latest
+# Env (optional):
+#          NTFY_TOPIC_URL default http://$CACHE_HOST:8090/frogcache-updates
+#          NTFY_TOPIC     topic name, derived from NTFY_TOPIC_URL if unset
+#          NTFY_CONTAINER ntfy container name on the host (default: ntfy)
 set -euo pipefail
 
-CONTEXT="${CONTEXT:-<redacted-host>}"
+CONTEXT="${CONTEXT:?set CONTEXT to the docker context name for the LAN host}"
+CACHE_HOST="${CACHE_HOST:?set CACHE_HOST to the LAN host/IP the cache is served on}"
+UPDATER_IMAGE="${UPDATER_IMAGE:?set UPDATER_IMAGE, e.g. <registry>/frogcache/updater:latest}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 D=(docker --context "$CONTEXT")
-CACHE_URL="http://<redacted-ip>:8091/"
-NTFY_TOPIC_URL="http://<redacted-ip>:8090/frogcache-updates"
-UPDATER_IMAGE="${UPDATER_IMAGE:-<redacted-ip>:5005/frogcache/updater:latest}"
+CACHE_URL="http://${CACHE_HOST}:8091/"
+NTFY_TOPIC_URL="${NTFY_TOPIC_URL:-http://${CACHE_HOST}:8090/frogcache-updates}"
+# ACL topic must match the topic in the URL, otherwise the publisher token
+# would be saved but denied access on a deny-by-default ntfy server.
+NTFY_TOPIC="${NTFY_TOPIC:-$(basename "${NTFY_TOPIC_URL%/}")}"
+[[ -n "$NTFY_TOPIC" ]] || { echo "ERROR: cannot derive ntfy topic from NTFY_TOPIC_URL='$NTFY_TOPIC_URL'" >&2; exit 1; }
+NTFY_CONTAINER="${NTFY_CONTAINER:-ntfy}"
 
 VOLUMES=(frogcache-files frogcache-artifacts frogcache-data frogcache-secrets)
 
@@ -48,14 +60,14 @@ seed_volume() {
 }
 
 setup_ntfy_publisher() {
-    if ! "${D[@]}" exec ntfy ntfy user list 2>/dev/null | grep -q '^user frogcache '; then
+    if ! "${D[@]}" exec "$NTFY_CONTAINER" ntfy user list 2>/dev/null | grep -q '^user frogcache '; then
         local pw
         pw="$(openssl rand -hex 24)"
-        printf '%s\n%s\n' "$pw" "$pw" | "${D[@]}" exec -i ntfy ntfy user add frogcache >/dev/null
+        printf '%s\n%s\n' "$pw" "$pw" | "${D[@]}" exec -i "$NTFY_CONTAINER" ntfy user add frogcache >/dev/null
     fi
-    "${D[@]}" exec ntfy ntfy access frogcache frogcache-updates write-only >/dev/null
+    "${D[@]}" exec "$NTFY_CONTAINER" ntfy access frogcache "$NTFY_TOPIC" write-only >/dev/null
     local token
-    token="$("${D[@]}" exec ntfy ntfy token add frogcache | grep -o 'tk_[A-Za-z0-9]*' | head -1)"
+    token="$("${D[@]}" exec "$NTFY_CONTAINER" ntfy token add frogcache | grep -o 'tk_[A-Za-z0-9]*' | head -1)"
     if [[ -z "$token" ]]; then
         echo "ERROR: could not obtain ntfy token for user frogcache" >&2
         exit 1
@@ -67,7 +79,7 @@ setup_ntfy_publisher() {
 
 ensure_image() {
     if ! "${D[@]}" image inspect "$UPDATER_IMAGE" >/dev/null 2>&1; then
-        echo "== image $UPDATER_IMAGE not on $CONTEXT; building locally and pushing"
+        echo "== image $UPDATER_IMAGE not on context $CONTEXT; building locally and pushing"
         docker build -t "$UPDATER_IMAGE" "$ROOT"
         "${D[@]}" push "$UPDATER_IMAGE"
     fi

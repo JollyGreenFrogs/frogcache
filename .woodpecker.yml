@@ -1,7 +1,7 @@
 # Woodpecker CI for frogcache (house rule: Woodpecker only, no GitHub Actions).
 # - every push/PR: byte-compile gate + unit tests
-# - push to main: build the updater image and push it to the private registry
-#   on <redacted-host> (<redacted-ip>:5005, secret `docker_registry`), where deploy/ pulls it.
+# - push to main: build the updater image and push it to your private registry
+#   (secret `docker_registry`), where deploy/ pulls it.
 when:
   event: [push, pull_request]
 

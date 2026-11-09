@@ -1,0 +1,43 @@
+# CodeQL security scanning (GitHub-hosted; CI itself stays on Woodpecker —
+# this workflow only scans, it does not build or test).
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      # Actions pinned to commit SHAs (supply-chain hardening); Dependabot
+      # (.github/dependabot.yml, github-actions ecosystem) keeps them current.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: python
+          # security-extended includes everything in security-and-quality plus
+          # additional queries for more thorough analysis
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: "/language:python"
