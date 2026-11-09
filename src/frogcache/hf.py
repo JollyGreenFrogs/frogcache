@@ -10,15 +10,55 @@ time. Governing ADR: docs/decisions/ADR-002-hf-model-hosting.md.
 """
 
 import fnmatch
+import json
 import shutil
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from frogcache.data_models.artifact import ArtifactSpec, UpstreamRelease
 from frogcache.upstream import fetch_json
 
 HF_API_MODEL_URL = "https://huggingface.co/api/models/{repo}"
-HF_API_TREE_URL = "https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true&limit=1000"
+HF_API_TREE_URL = "https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true"
 HF_RESOLVE_URL = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
+
+
+def fetch_tree_pages(url: str, timeout: int = 60) -> list:
+    """GET the HF tree endpoint and follow Link rel="next" pagination to the end.
+
+    fetch_json discards response headers, so pagination is handled here: every
+    page is collected before the file list is built — otherwise matching files
+    on later pages would be silently omitted and the partial selection treated
+    as a complete revision.
+
+    Args:
+        url: absolute tree URL returning a JSON array, paginated via Link headers.
+        timeout: per-request timeout in seconds.
+    Returns:
+        All entries from all pages.
+    Raises:
+        RuntimeError: on HTTP/network error.
+    """
+    items: list = []
+    next_url: str = url
+    while next_url:
+        request = urllib.request.Request(
+            next_url, headers={"User-Agent": "frogcache/1.0", "Accept": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                items.extend(json.loads(response.read().decode()))
+                link = response.headers.get("Link", "")
+        except urllib.error.HTTPError as err:
+            raise RuntimeError(f"GET {next_url} -> HTTP {err.code}") from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"GET {next_url} failed: {err.reason}") from err
+        next_url = ""
+        for part in link.split(","):
+            if 'rel="next"' in part:
+                next_url = part.split(";")[0].strip().strip("<>")
+    return items
 
 
 def latest_hf_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRelease | None:
@@ -32,12 +72,10 @@ def latest_hf_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRelease 
     Returns:
         UpstreamRelease with version = revision commit sha and files =
         ((path, resolve_url), ...) (url/filename empty — multi-file mode), or
-        None if the repo/revision has no matching files.
+        None if the repo/revision has no matching files. All tree pages are
+        followed (Link rel="next") before the file list is built.
     Raises:
         RuntimeError: if the HF API cannot be reached.
-    Note:
-        the tree API paginates (~1000 entries per request); repos with more
-        files need HF_API_TREE_URL's limit raised.
     """
     source = spec.source
     revision_info = fetch_json(
@@ -50,7 +88,7 @@ def latest_hf_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRelease 
     # Query the tree and build resolve URLs with the resolved sha, not the
     # mutable revision name: 'main' can advance between requests (or during a
     # multi-GB download), which would store mixed-commit files under one sha.
-    tree = fetch_json(
+    tree = fetch_tree_pages(
         HF_API_TREE_URL.format(repo=source.repo, revision=sha), timeout=timeout
     )
     files = []
@@ -92,20 +130,28 @@ def cached_hf_versions(cache_dir: str, repo: str) -> list[str]:
     )
 
 
-def apply_hf_retention(cache_dir: str, repo: str, keep: int) -> list[str]:
-    """Delete all but the newest `keep` revision dirs of a HF model.
+def apply_hf_retention(cache_dir: str, repo: str, keep_versions: set[str]) -> list[str]:
+    """Remove every cached revision dir of a HF model that is not in keep_versions.
+
+    Incomplete revisions (dirs without manifest entries, e.g. left by a failed
+    download) are removed too, so disk retention and manifest pruning agree:
+    both keep exactly the newest RETAIN successful revisions.
 
     Args:
         cache_dir: flat cache directory.
         repo: 'org/model'.
-        keep: number of newest revisions to retain (>= 1).
+        keep_versions: revision shas to keep.
     Returns:
         Revision shas that were removed.
     """
     removed = []
-    for version in cached_hf_versions(cache_dir, repo)[keep:]:
-        shutil.rmtree(hf_dir(cache_dir, repo, version), ignore_errors=True)
-        removed.append(version)
+    base = Path(cache_dir) / "hf" / repo
+    if not base.is_dir():
+        return removed
+    for path in base.iterdir():
+        if path.is_dir() and path.name not in keep_versions:
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path.name)
     return removed
 
 

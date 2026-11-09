@@ -2,7 +2,7 @@
 
 ## Stack & Environment
 
-- **Updater**: Python 3.11+ stdlib only (`src/frogcache/`), no runtime deps; pytest for tests
+- **Updater**: Python 3.15 (latest stable) stdlib only (`src/frogcache/`), no runtime deps; pytest for tests
 - **Cache**: nginx autoindex over a docker volume (`deploy/docker-compose.yml`)
 - **CI**: Woodpecker only (`.woodpecker.yml`) — compileall + pytest on push/PR, image build on `main`. GitHub Actions runs CodeQL scanning only (`.github/workflows/codeql.yml`)
 - **Deploy**: `deploy/deploy.sh`, **docker context only — never SSH into servers**. Host values come from env (`CONTEXT`, `CACHE_HOST`, `UPDATER_IMAGE`), never hardcoded

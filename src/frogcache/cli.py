@@ -14,7 +14,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from frogcache import cache, hf, upstream
+from frogcache import cache, hf, manifest, upstream
 from frogcache.config import load_config
 from frogcache.data_models.artifact import ManifestEntry
 from frogcache.data_models.config import Config
@@ -40,7 +40,7 @@ def check_hf_artifact(config: Config, spec) -> str:
     if release is None:
         return f"{spec.name}: no files found upstream"
     cached = hf.cached_hf_versions(config.cache_dir, spec.source.repo)
-    manifest = cache.load_manifest(config.state_file)
+    manifest = manifest.load_manifest(config.state_file)
     entries = manifest["artifacts"].get(spec.name, [])
     # Skip only if the newest cached revision is complete (files on disk AND in
     # the manifest) — a failed download or a changed files pattern must retry.
@@ -57,17 +57,22 @@ def check_hf_artifact(config: Config, spec) -> str:
     for path, url in release.files:
         _, sha256 = cache.download_atomic(url, str(dest), path, config.http_timeout)
         downloaded.append((f"hf/{spec.source.repo}/{release.version}/{path}", sha256))
-    removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, config.retain)
-    cache.record_fetch_multi(
+    # Record first: manifest versions are the successful revisions. Disk and
+    # manifest retention then use the same keep-set (newest RETAIN successful
+    # versions), so an incomplete revision (failed download) is pruned from
+    # both instead of being kept as a broken rollback target.
+    manifest.record_fetch_multi(
         manifest,
         spec.name,
         release.version,
         downloaded,
         spec.source.type,
-        config.retain,
         datetime.now(timezone.utc).isoformat(),
     )
-    cache.save_manifest(config.state_file, manifest)
+    kept = set(manifest.manifest_versions(manifest, spec.name)[: config.retain])
+    removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept)
+    manifest.prune_manifest_versions(manifest, spec.name, kept)
+    manifest.save_manifest(config.state_file, manifest)
     before = cached[0][:12] if cached else "none"
     note = f" (pruned {', '.join(v[:12] for v in removed)})" if removed else ""
     return f"{spec.name}: updated {before} -> {release.version[:12]} ({len(downloaded)} files){note}"
@@ -96,8 +101,8 @@ def check_artifact(config: Config, spec) -> str:
         release.url, config.cache_dir, release.filename, config.http_timeout
     )
     removed = cache.apply_retention(config.cache_dir, spec.name, config.retain)
-    manifest = cache.load_manifest(config.state_file)
-    cache.record_fetch(
+    manifest = manifest.load_manifest(config.state_file)
+    manifest.record_fetch(
         manifest,
         spec.name,
         ManifestEntry(
@@ -110,7 +115,7 @@ def check_artifact(config: Config, spec) -> str:
         ),
         config.retain,
     )
-    cache.save_manifest(config.state_file, manifest)
+    manifest.save_manifest(config.state_file, manifest)
     note = f" (pruned {', '.join(removed)})" if removed else ""
     return f"{spec.name}: updated {cached_before} -> {release.version}{note}"
 

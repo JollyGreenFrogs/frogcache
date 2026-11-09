@@ -2,7 +2,7 @@
 
 import os
 
-from frogcache import cache, hf
+from frogcache import cache, hf, manifest
 from frogcache.data_models.artifact import ArtifactSpec, SourceSpec
 
 
@@ -14,19 +14,23 @@ def _hf_spec(files=()):
     )
 
 
-def test_latest_hf_release_filters_files(monkeypatch):
-    def fake_fetch(url, token="", timeout=60):
-        if url.endswith("/revision/main"):
-            return {"sha": "abc123def456"}
-        assert "recursive=true" in url
-        return [
-            {"type": "directory", "path": "refs"},
-            {"type": "file", "path": "qwen3-8b-q4_k_m.gguf"},
-            {"type": "file", "path": "config.json"},
-            {"type": "file", "path": "README.md"},
-        ]
+def _tree():
+    return [
+        {"type": "directory", "path": "refs"},
+        {"type": "file", "path": "qwen3-8b-q4_k_m.gguf"},
+        {"type": "file", "path": "config.json"},
+        {"type": "file", "path": "README.md"},
+    ]
 
-    monkeypatch.setattr(hf, "fetch_json", fake_fetch)
+
+def test_latest_hf_release_filters_files(monkeypatch):
+    monkeypatch.setattr(
+        hf, "fetch_json",
+        lambda url, token="", timeout=60: {"sha": "abc123def456"}
+        if url.endswith("/revision/main")
+        else (_ for _ in ()).throw(AssertionError("tree must use fetch_tree_pages")),
+    )
+    monkeypatch.setattr(hf, "fetch_tree_pages", lambda url, timeout=60: _tree())
     release = hf.latest_hf_release(_hf_spec(files=("*.gguf", "config.json")), timeout=30)
     assert release.version == "abc123def456"
     assert release.url == "" and release.filename == ""
@@ -39,24 +43,56 @@ def test_latest_hf_release_filters_files(monkeypatch):
 
 
 def test_latest_hf_release_all_files_when_no_patterns(monkeypatch):
+    monkeypatch.setattr(hf, "fetch_json", lambda url, token="", timeout=60: {"sha": "abc123"})
     monkeypatch.setattr(
-        hf, "fetch_json",
-        lambda url, token="", timeout=60: {"sha": "abc123"}
-        if url.endswith("/revision/main")
-        else [{"type": "file", "path": "model.gguf"}],
+        hf, "fetch_tree_pages", lambda url, timeout=60: [{"type": "file", "path": "model.gguf"}]
     )
     release = hf.latest_hf_release(_hf_spec(), timeout=30)
     assert [p for p, _ in release.files] == ["model.gguf"]
 
 
 def test_latest_hf_release_none_when_no_matching_files(monkeypatch):
+    monkeypatch.setattr(hf, "fetch_json", lambda url, token="", timeout=60: {"sha": "abc123"})
     monkeypatch.setattr(
-        hf, "fetch_json",
-        lambda url, token="", timeout=60: {"sha": "abc123"}
-        if url.endswith("/revision/main")
-        else [{"type": "file", "path": "README.md"}],
+        hf, "fetch_tree_pages", lambda url, timeout=60: [{"type": "file", "path": "README.md"}]
     )
     assert hf.latest_hf_release(_hf_spec(files=("*.gguf",)), timeout=30) is None
+
+
+def test_fetch_tree_pages_follows_link_next(monkeypatch):
+    import json as jsonlib
+
+    pages = {
+        "https://huggingface.co/api/x/tree/sha?recursive=true": (
+            [{"type": "file", "path": "a.gguf"}],
+            '<https://huggingface.co/api/x/tree/sha?recursive=true&cursor=2>; rel="next"',
+        ),
+        "https://huggingface.co/api/x/tree/sha?recursive=true&cursor=2": (
+            [{"type": "file", "path": "b.gguf"}],
+            "",
+        ),
+    }
+
+    class FakeResponse:
+        def __init__(self, body, link):
+            self._body = body
+            self.headers = {"Link": link}
+
+        def read(self):
+            return jsonlib.dumps(self._body).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout=60):
+        return FakeResponse(*pages[request.full_url])
+
+    monkeypatch.setattr(hf.urllib.request, "urlopen", fake_urlopen)
+    items = hf.fetch_tree_pages("https://huggingface.co/api/x/tree/sha?recursive=true", timeout=30)
+    assert [i["path"] for i in items] == ["a.gguf", "b.gguf"]
 
 
 def test_cached_hf_versions_newest_first_by_mtime(tmp_path):
@@ -70,14 +106,17 @@ def test_cached_hf_versions_newest_first_by_mtime(tmp_path):
     assert hf.cached_hf_versions(str(tmp_path), "Qwen/Other") == []
 
 
-def test_apply_hf_retention_keeps_newest_revisions(tmp_path):
-    for i, version in enumerate(("sha_old", "sha_mid", "sha_new")):
+def test_apply_hf_retention_keeps_only_keep_versions_and_drops_incomplete(tmp_path):
+    for i, version in enumerate(("sha_old", "sha_mid", "sha_new", "sha_partial")):
         d = hf.hf_dir(str(tmp_path), "Qwen/Qwen3-8B-GGUF", version)
         (d / "model.gguf").parent.mkdir(parents=True, exist_ok=True)
         (d / "model.gguf").write_bytes(b"x")
         os.utime(d, (1000 + i, 1000 + i))
-    removed = hf.apply_hf_retention(str(tmp_path), "Qwen/Qwen3-8B-GGUF", keep=2)
-    assert removed == ["sha_old"]
+    # sha_partial is newest on disk but has no manifest entries (failed download)
+    removed = hf.apply_hf_retention(
+        str(tmp_path), "Qwen/Qwen3-8B-GGUF", keep_versions={"sha_mid", "sha_new"}
+    )
+    assert sorted(removed) == ["sha_old", "sha_partial"]
     remaining = [p.name for p in (tmp_path / "hf" / "Qwen/Qwen3-8B-GGUF").iterdir()]
     assert sorted(remaining) == ["sha_mid", "sha_new"]
 
@@ -92,24 +131,27 @@ def test_download_atomic_supports_subdir_filename(tmp_path):
     assert len(sha256) == 64
 
 
-def test_record_fetch_multi_prunes_old_versions(tmp_path):
-    manifest = {"artifacts": {}}
-    cache.record_fetch_multi(
-        manifest, "qwen3-8b", "sha_old", [("hf/o/m/sha_old/a.gguf", "0" * 64)],
-        "huggingface", 2, "2026-11-01T00:00:00+00:00",
+def test_record_and_prune_manifest_versions_align_with_disk_retention(tmp_path):
+    m = {"artifacts": {}}
+    manifest.record_fetch_multi(
+        m, "qwen3-8b", "sha_old", [("hf/o/m/sha_old/a.gguf", "0" * 64)],
+        "huggingface", "2026-11-01T00:00:00+00:00",
     )
-    cache.record_fetch_multi(
-        manifest, "qwen3-8b", "sha_new", [("hf/o/m/sha_new/a.gguf", "1" * 64),
+    manifest.record_fetch_multi(
+        m, "qwen3-8b", "sha_new", [("hf/o/m/sha_new/a.gguf", "1" * 64),
                                           ("hf/o/m/sha_new/config.json", "2" * 64)],
-        "huggingface", 2, "2026-11-08T00:00:00+00:00",
+        "huggingface", "2026-11-08T00:00:00+00:00",
     )
-    entries = manifest["artifacts"]["qwen3-8b"]
-    assert {e["version"] for e in entries} == {"sha_old", "sha_new"}
-    cache.record_fetch_multi(
-        manifest, "qwen3-8b", "sha_newer", [("hf/o/m/sha_newer/a.gguf", "3" * 64)],
-        "huggingface", 2, "2026-11-09T00:00:00+00:00",
+    manifest.record_fetch_multi(
+        m, "qwen3-8b", "sha_newer", [("hf/o/m/sha_newer/a.gguf", "3" * 64)],
+        "huggingface", "2026-11-09T00:00:00+00:00",
     )
-    entries = manifest["artifacts"]["qwen3-8b"]
+    # newest-first by fetched_at; keep newest 2 -> prune sha_old from manifest
+    assert manifest.manifest_versions(m, "qwen3-8b") == ["sha_newer", "sha_new", "sha_old"]
+    kept = set(manifest.manifest_versions(m, "qwen3-8b")[:2])
+    removed = manifest.prune_manifest_versions(m, "qwen3-8b", kept)
+    assert removed == ["sha_old"]
+    entries = m["artifacts"]["qwen3-8b"]
     assert {e["version"] for e in entries} == {"sha_new", "sha_newer"}
     assert len(entries) == 3
 

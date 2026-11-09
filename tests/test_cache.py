@@ -2,7 +2,7 @@
 
 import json
 
-from frogcache import cache
+from frogcache import cache, manifest
 from frogcache.data_models.artifact import ManifestEntry
 
 
@@ -61,14 +61,14 @@ def test_download_atomic_and_manifest(tmp_path, tmp_path_factory):
     assert not list(cache_dir.glob(".*.part"))
 
     state = tmp_path / "manifest.json"
-    manifest = cache.load_manifest(str(state))
-    cache.record_fetch(
-        manifest,
+    m = manifest.load_manifest(str(state))
+    manifest.record_fetch(
+        m,
         "a",
         ManifestEntry(version="1.0", filename=path.name, sha256=sha256, source="pypi", url=""),
         keep=2,
     )
-    cache.save_manifest(str(state), manifest)
+    manifest.save_manifest(str(state), m)
     assert json.loads(state.read_text())["artifacts"]["a"][0]["sha256"] == sha256
 
 

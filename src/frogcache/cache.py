@@ -9,14 +9,12 @@ Governing ADR: docs/decisions/ADR-001.
 """
 
 import hashlib
-import json
 import os
 import re
 import shutil
 import urllib.request
 from pathlib import Path
 
-from frogcache.data_models.artifact import ManifestEntry
 from frogcache.versions import is_newer, parse_version
 
 WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)-[^-]+-[^-]+-[^-]+\.whl$")
@@ -114,86 +112,7 @@ def apply_retention(cache_dir: str, name: str, keep: int) -> list[str]:
     return removed
 
 
-def load_manifest(state_file: str) -> dict:
-    """Load the manifest JSON; missing/corrupt file -> empty manifest."""
-    try:
-        manifest = json.loads(Path(state_file).read_text())
-        manifest.setdefault("artifacts", {})
-        return manifest
-    except (OSError, json.JSONDecodeError):
-        return {"artifacts": {}}
-
-
-def save_manifest(state_file: str, manifest: dict) -> None:
-    """Persist the manifest atomically (temp file + rename)."""
-    path = Path(state_file)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(manifest, indent=2))
-    tmp.replace(path)
-
-
-def record_fetch(manifest: dict, name: str, entry: ManifestEntry, keep: int) -> None:
-    """Append a fetch entry to the manifest and prune entries beyond `keep`.
-
-    Args:
-        manifest: manifest dict (mutated).
-        name: normalized artifact name.
-        entry: ManifestEntry for the fetch.
-        keep: number of newest entries to retain for the artifact.
-    """
-    entries = manifest["artifacts"].setdefault(name, [])
-    entries.append(entry.__dict__)
-    entries.sort(key=lambda e: parse_version(e["version"]), reverse=True)
-    del entries[keep:]
-
-
 def is_update_available(latest_version: str, cache_dir: str, name: str) -> bool:
     """Return True if latest_version is newer than the newest cached version."""
     cached = newest_cached_version(cache_dir, name)
     return cached is None or is_newer(latest_version, cached)
-
-
-def record_fetch_multi(
-    manifest: dict,
-    name: str,
-    version: str,
-    files: list[tuple[str, str]],
-    source: str,
-    keep: int,
-    fetched_at: str,
-) -> None:
-    """Append one manifest entry per downloaded file and prune old versions (multi-file fetch).
-
-    Used for HuggingFace model fetches (ADR-002): one fetch = many files sharing
-    one version (revision sha). Entries of versions older than the newest `keep`
-    versions are dropped.
-
-    Args:
-        manifest: manifest dict (mutated).
-        name: artifact name.
-        version: version (revision sha) all files belong to.
-        files: [(filename, sha256)] pairs to record.
-        source: source type label.
-        keep: number of newest versions to retain.
-        fetched_at: ISO-8601 UTC timestamp for the new entries.
-    """
-    entries = manifest["artifacts"].setdefault(name, [])
-    for filename, sha256 in files:
-        entries.append(
-            {
-                "version": version,
-                "filename": filename,
-                "sha256": sha256,
-                "source": source,
-                "url": "",
-                "fetched_at": fetched_at,
-            }
-        )
-    versions = sorted(
-        {e["version"] for e in entries},
-        key=lambda v: max(e["fetched_at"] for e in entries if e["version"] == v),
-        reverse=True,
-    )
-    drop = set(versions[keep:])
-    manifest["artifacts"][name] = [e for e in entries if e["version"] not in drop]
