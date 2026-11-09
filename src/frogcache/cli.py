@@ -40,15 +40,24 @@ def check_hf_artifact(config: Config, spec) -> str:
     if release is None:
         return f"{spec.name}: no files found upstream"
     cached = hf.cached_hf_versions(config.cache_dir, spec.source.repo)
-    if cached and cached[0] == release.version:
+    manifest = cache.load_manifest(config.state_file)
+    entries = manifest["artifacts"].get(spec.name, [])
+    # Skip only if the newest cached revision is complete (files on disk AND in
+    # the manifest) — a failed download or a changed files pattern must retry.
+    if cached and cached[0] == release.version and hf.revision_complete(
+        config.cache_dir,
+        spec.source.repo,
+        release.version,
+        [path for path, _ in release.files],
+        entries,
+    ):
         return f"{spec.name}: up to date ({release.version[:12]})"
-    dest = cache.hf_dir(config.cache_dir, spec.source.repo, release.version)
+    dest = hf.hf_dir(config.cache_dir, spec.source.repo, release.version)
     downloaded = []
     for path, url in release.files:
         _, sha256 = cache.download_atomic(url, str(dest), path, config.http_timeout)
         downloaded.append((f"hf/{spec.source.repo}/{release.version}/{path}", sha256))
-    removed = cache.apply_hf_retention(config.cache_dir, spec.source.repo, config.retain)
-    manifest = cache.load_manifest(config.state_file)
+    removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, config.retain)
     cache.record_fetch_multi(
         manifest,
         spec.name,

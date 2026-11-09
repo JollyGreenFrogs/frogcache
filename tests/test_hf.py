@@ -32,8 +32,9 @@ def test_latest_hf_release_filters_files(monkeypatch):
     assert release.url == "" and release.filename == ""
     paths = [p for p, _ in release.files]
     assert paths == ["qwen3-8b-q4_k_m.gguf", "config.json"]
+    # tree + resolve URLs must use the resolved sha, not the mutable revision
     assert release.files[0][1] == (
-        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-q4_k_m.gguf"
+        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/abc123def456/qwen3-8b-q4_k_m.gguf"
     )
 
 
@@ -111,6 +112,21 @@ def test_record_fetch_multi_prunes_old_versions(tmp_path):
     entries = manifest["artifacts"]["qwen3-8b"]
     assert {e["version"] for e in entries} == {"sha_new", "sha_newer"}
     assert len(entries) == 3
+
+
+def test_revision_complete_requires_files_on_disk_and_manifest(tmp_path):
+    repo = "Qwen/Qwen3-8B-GGUF"
+    dest = hf.hf_dir(str(tmp_path), repo, "sha123")
+    (dest / "model.gguf").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "model.gguf").write_bytes(b"x")
+    entries = [{"version": "sha123", "filename": f"hf/{repo}/sha123/model.gguf"}]
+    assert hf.revision_complete(str(tmp_path), repo, "sha123", ["model.gguf"], entries)
+    # missing manifest entry -> incomplete (retry)
+    assert not hf.revision_complete(str(tmp_path), repo, "sha123", ["model.gguf"], [])
+    # missing file on disk -> incomplete (retry)
+    assert not hf.revision_complete(
+        str(tmp_path), repo, "sha123", ["model.gguf", "config.json"], entries
+    )
 
 
 def test_load_artifacts_huggingface(tmp_path):
