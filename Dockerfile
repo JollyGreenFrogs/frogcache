@@ -1,6 +1,6 @@
 # frogcache updater image — stdlib-only, so no dependency resolution is needed
 # at build or run time (works even when external hosts are unreachable).
-FROM python:3.13-alpine
+FROM python:3.15-alpine
 
 WORKDIR /app
 COPY src ./src
