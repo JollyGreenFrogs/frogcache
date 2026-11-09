@@ -32,8 +32,10 @@ D=(docker --context "$CONTEXT")
 CACHE_URL="http://${CACHE_HOST}:8091/"
 NTFY_TOPIC_URL="${NTFY_TOPIC_URL:-http://${CACHE_HOST}:8090/frogcache-updates}"
 # ACL topic must match the topic in the URL, otherwise the publisher token
-# would be saved but denied access on a deny-by-default ntfy server.
-NTFY_TOPIC="${NTFY_TOPIC:-$(basename "${NTFY_TOPIC_URL%/}")}"
+# would be saved but denied access on a deny-by-default ntfy server. Strip
+# any query/fragment (e.g. ?priority=high) before extracting the topic.
+NTFY_TOPIC_URL_PATH="${NTFY_TOPIC_URL%%[?#]*}"
+NTFY_TOPIC="${NTFY_TOPIC:-$(basename "${NTFY_TOPIC_URL_PATH%/}")}"
 [[ -n "$NTFY_TOPIC" ]] || { echo "ERROR: cannot derive ntfy topic from NTFY_TOPIC_URL='$NTFY_TOPIC_URL'" >&2; exit 1; }
 NTFY_CONTAINER="${NTFY_CONTAINER:-ntfy}"
 
