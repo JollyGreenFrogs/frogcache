@@ -1,19 +1,26 @@
 # frogcache
 
-Self-hosted LAN **artifact cache** on frost (10.0.27.50) with **weekly
-auto-update**: serves cached downloads (wheels, release assets, …) as a flat
-HTTP index for `--find-links`, watches each artifact's upstream once a week,
-**downloads newer versions automatically**, and retains **latest + latest-1**
-files per artifact (rollback). Alerts/updates go to ntfy topic
-`frogcache-updates`.
+Self-hosted LAN **artifact cache** with **weekly auto-update**: serves cached
+downloads (wheels, release assets, …) as a flat HTTP index for `--find-links`,
+watches each artifact's upstream once a week, **downloads newer versions
+automatically**, and retains **latest + latest-1** files per artifact
+(rollback). Alerts/updates go to an ntfy topic (`frogcache-updates`).
 
-Motivation: spaCy language models are only published as GitHub release wheels
-and github.com release downloads 504'd, failing vira CI (PR #115, pipeline
-444). Design: [docs/decisions/ADR-001-frogcache.md](docs/decisions/ADR-001-frogcache.md).
+Motivation: spaCy language models are only published as GitHub release wheels,
+and github.com release downloads once 504'd and failed CI. Design:
+[docs/decisions/ADR-001-frogcache.md](docs/decisions/ADR-001-frogcache.md).
+
+> This repo is public — it contains **no internal hostnames, IPs, or project
+> names**. Deploy it with your own values (see [Deploy](#deploy--no-ssh-docker-context-only)).
+
+**License: [CC BY-NC-SA 4.0](LICENSE) — source-available, no commercial reuse.**
+**Co-authored by humans and AI** — see [Authorship](#authorship--human--ai-co-creation).
 
 ## Layout
 
 ```
+├── LICENSE                 # CC BY-NC-SA 4.0 (no commercial reuse)
+├── CONTRIBUTING.md         # what counts as a contribution + AI co-authorship rules
 ├── src/frogcache/          # updater service (stdlib only)
 │   ├── cli.py              #   --once / --loop (weekly), orchestration
 │   ├── upstream.py         #   PyPI / GitHub-compat / GitHub-releases sources
@@ -25,32 +32,43 @@ and github.com release downloads 504'd, failing vira CI (PR #115, pipeline
 ├── tests/                  # pytest
 ├── deploy/
 │   ├── docker-compose.yml  # cache (nginx :8091) + updater containers, named volumes
-│   └── deploy.sh           # no-ssh deploy via docker --context frost
+│   └── deploy.sh           # no-SSH deploy via docker context (env-configured)
 ├── seed/
 │   ├── artifacts.json      # what to cache + where upstream lives
 │   └── wheels/             # initial cache content
-├── Dockerfile              # updater image (built by Woodpecker -> 10.0.27.50:5005)
+├── Dockerfile              # updater image (built by Woodpecker -> your registry)
 └── .woodpecker.yml         # CI: compileall + pytest on push/PR; image build on main
 ```
 
-## Deploy (frost) — no SSH, docker context only
+## Deploy — no SSH, docker context only
 
-House rule #1: **never SSH into servers**; everything goes through
-`docker --context frost`.
+Rule #1: **never SSH into servers**; everything goes through
+`docker --context <name>`.
+
+All host-specific values come from the environment (nothing internal is
+hardcoded in this repo):
 
 ```bash
 cd deploy
+export CONTEXT=<docker-context> \
+       CACHE_HOST=<lan-host-or-ip> \
+       UPDATER_IMAGE=<registry>/frogcache/updater:latest
 ./deploy.sh        # seeds volumes, sets up ntfy publisher, ensures image, compose up, verifies
-curl -s http://10.0.27.50:8091/ | grep -o 'en_core_web_sm[^"<]*'
+curl -s "http://$CACHE_HOST:8091/" | grep -o 'en_core_web_sm[^"<]*'
 ```
 
-Port **8091** because frost's ntfy already owns host port 8090.
+`deploy.sh` also accepts `NTFY_TOPIC_URL` (default
+`http://$CACHE_HOST:8090/frogcache-updates`) and `NTFY_CONTAINER` (default
+`ntfy`) if your ntfy setup differs.
+
+Port **8091** because 8090 is commonly taken on the host (e.g. by ntfy).
 
 ## Consume
 
-- pip (CI / Dockerfile): `--find-links http://10.0.27.50:8091/`
-- uv (vira): `[tool.uv] find-links = ["http://10.0.27.50:8091/"]` + plain name
-  `"en-core-web-sm==3.8.0"` (not a direct URL, so find-links is consulted)
+- pip (CI / Dockerfile): `--find-links http://<cache-host>:8091/`
+- uv (in `pyproject.toml`): `[tool.uv] find-links = ["http://<cache-host>:8091/"]`
+  + plain name `"en-core-web-sm==3.8.0"` (not a direct URL, so find-links is
+  consulted)
 
 ## Add an artifact
 
@@ -79,7 +97,7 @@ all but the newest `RETAIN=2` files per artifact → posts to ntfy
 Manual single run (docker context only):
 
 ```bash
-docker --context frost compose -f deploy/docker-compose.yml run --rm updater python -m frogcache --once
+docker --context <name> compose -f deploy/docker-compose.yml run --rm updater python -m frogcache --once
 ```
 
 ## Dev
@@ -97,3 +115,24 @@ PYTHONPATH=src python3 -m compileall -q src tests
 
 (Rebuilt locally from the uv cache, so the hash differs from the GitHub release
 wheel; content identical — reference by name.)
+
+## License
+
+frogcache code and documentation are licensed under
+**CC BY-NC-SA 4.0** — free to use, share, and adapt for **non-commercial**
+purposes with attribution and share-alike (ShareAlike applies only to shared
+adaptations). Because of the NonCommercial clause this is **source-available,
+not OSI "open source"**. **Commercial reuse is not permitted** without
+separate written permission from the relevant copyright holders (contributors
+retain their copyright).
+See [LICENSE](LICENSE). Cached third-party artifacts (e.g. `seed/wheels/`)
+are not covered — they keep their upstream licenses (spaCy models are
+Apache-2.0).
+
+## Authorship — human + AI co-creation
+
+All of frogcache is **co-created by humans and AI assistants** (Mistral Vibe /
+Copilot-style agents). The AI contribution is explicit in the history: every
+commit ends with the trailers `Generated by Mistral Vibe.` and
+`Co-Authored-By: Mistral Vibe <vibe@mistral.ai>`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the contribution rules that apply.

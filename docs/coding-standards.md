@@ -55,15 +55,15 @@
 - **No re-export shims for internal moves** — move + update all import sites atomically. Exception: a **time-boxed migration shim** during an active rewrite, with a tracking issue and removal date; shims for public/external surfaces are permanent
 
 ## Database access
-- New code in the main app uses the **ORM** (SQLAlchemy `ViraBase`) — no raw SQL
-- Exception on record: `vira_memory_service` is raw sqlcipher3 until its dedicated ORM-swap ADR lands — new code there follows the existing raw convention, and the swap is one coherent change, never per-PR hybrids
+- New code in the main app uses the **ORM** base — no raw SQL
+- Exception on record: one legacy service is raw sqlcipher3 until its dedicated ORM-swap ADR lands — new code there follows the existing raw convention, and the swap is one coherent change, never per-PR hybrids
 
 ## Secrets & user-data privacy
 - Secrets live in **Vault / env only — never in the DB**
-- Raw user content never goes to system stores (`__vira__`): user data lives only in the user's own encrypted DB; durable rows are redacted (hashes/metrics); full text is transient-only and purged **service-side** (scheduled sweep + on activity), not just on read
+- Raw user content never goes to system stores: user data lives only in the user's own encrypted DB; durable rows are redacted (hashes/metrics); full text is transient-only and purged **service-side** (scheduled sweep + on activity), not just on read
 
 ## Prompts & runtime config
-- **All model-facing prompt text lives in the prompt library** (KG prompt-module rows in `__vira__`); code constants are fallback seeds only
+- **All model-facing prompt text lives in the prompt library** (KG prompt-module rows); code constants are fallback seeds only
 - Runtime knobs are **env-only** until the DB-backed config ADR is approved
 
 ## Testing
