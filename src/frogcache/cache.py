@@ -8,6 +8,8 @@ remain (default: latest + latest-1).
 Governing ADR: docs/decisions/ADR-001.
 """
 
+import contextlib
+import fcntl
 import hashlib
 import os
 import re
@@ -112,42 +114,10 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
         raise RuntimeError(f"download {url} failed: {err}") from err
 
 
-def apply_retention(cache_dir: str, name: str, keep: int, keep_extra: set[str] | None = None) -> list[str]:
-    """Delete all but the newest `keep` cached files for an artifact.
-
-    Args:
-        cache_dir: flat cache directory.
-        name: normalized artifact name.
-        keep: number of newest files to retain (>= 1).
-    Returns:
-        Filenames that were deleted.
-    """
-    files = cached_files(cache_dir, name)  # newest first
-    extra = keep_extra or set()
-    seen_versions: set[str] = set()
-    removed = []
-    for version, filename in files:
-        if version in seen_versions:
-            # multi-platform wheel of an already-kept version: keep it (same version)
-            continue
-        if len(seen_versions) < keep or version in extra:
-            # window counts DISTINCT versions; keep_extra protects a version even
-            # outside the window (e.g. the just-fetched pull-through version)
-            seen_versions.add(version)
-            continue
-        (Path(cache_dir) / filename).unlink(missing_ok=True)
-        removed.append(filename)
-    return removed
-
-
 def is_update_available(latest_version: str, cache_dir: str, name: str) -> bool:
     """Return True if latest_version is newer than the newest cached version."""
     cached = newest_cached_version(cache_dir, name)
     return cached is None or is_newer(latest_version, cached)
-
-
-import contextlib
-import fcntl
 
 
 @contextlib.contextmanager

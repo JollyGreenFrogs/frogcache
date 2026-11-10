@@ -139,7 +139,6 @@ def check_artifact(config: Config, spec, conn, all_specs=()) -> str:
     _log(conn, "download_start", spec.name, release.version, file=release.filename)
     sha256, verified = _stage_and_promote(config, release.url, dest, release.sha256, _digest_required(spec.source.type, release.filename))
     _log(conn, "verify_pass", spec.name, release.version, file=release.filename, digest_verified=verified)
-    removed = cache.apply_retention(config.cache_dir, spec.name, config.retain)
     manifest.record_fetch(
         conn, spec.name,
         ManifestEntry(version=release.version, filename=dest.name, sha256=sha256,
@@ -148,6 +147,12 @@ def check_artifact(config: Config, spec, conn, all_specs=()) -> str:
                       digest_verified=verified),
         config.retain,
     )
+    # prune DISK to the same fetch-time keep-set the DB was just pruned to —
+    # version-ordered pruning here could delete a manifest-retained wheel or
+    # keep an unrecorded one
+    kept = set(manifest.versions(conn, spec.name))
+    with cache.retention_lock(config.cache_dir):
+        removed = cache.apply_retention_versions(config.cache_dir, spec.name, kept)
     _log(conn, "retention", spec.name, release.version, removed=removed)
     note = f" (pruned {', '.join(removed)})" if removed else ""
     return f"{spec.name}: updated {cached_before} -> {release.version}{note}"
@@ -260,7 +265,12 @@ def _apply_disk_retention(config: Config, conn, spec, keep_extra: set[str] | Non
     file currently being served (it is in the keep-set by construction).
     """
     if spec.source.type == "pypi":
-        cache.apply_retention(config.cache_dir, spec.name, config.retain, keep_extra=keep_extra)
+        # DB-aligned keep-set (fetch-time): deletes unrecorded files and never
+        # deletes a version the manifest retained; keep_extra protects the
+        # just-fetched pull-through version
+        kept = set(manifest.versions(conn, spec.name)) | (keep_extra or set())
+        with cache.retention_lock(config.cache_dir):
+            cache.apply_retention_versions(config.cache_dir, spec.name, kept)
         return
     if spec.source.type == "huggingface":
         try:
