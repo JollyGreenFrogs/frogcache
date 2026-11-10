@@ -134,7 +134,7 @@ def _pull_push_image(config: Config, spec: ArtifactSpec, release: UpstreamReleas
     if status == 200:
         old_digest = resp.get("Docker-Content-Digest", "")
         if old_digest and old_digest != release.version:
-            _request(f"{base}/v2/{repo}/manifests/{source.tag}-old-{old_digest.split(':')[-1][:12]}", method="PUT",
+            _request(f"{base}/v2/{repo}/manifests/{source.tag}-old-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{old_digest.split(':')[-1][:12]}", method="PUT",
                      headers={"Authorization": auth, "Content-Type": resp.get("Content-Type", MANIFEST_ACCEPT.split(",")[0])},
                      data=_request(f"{base}/v2/{repo}/manifests/{old_digest}", headers={"Accept": MANIFEST_ACCEPT, "Authorization": auth}, timeout=config.http_timeout)[2], timeout=config.http_timeout)
     status, _, _ = _request(f"{base}/v2/{repo}/manifests/{source.tag}", method="PUT",
@@ -176,7 +176,8 @@ def _prune_image_tags(config: Config, spec: ArtifactSpec, keep_latest: int) -> N
     if status != 200:
         return
     tags = json.loads(body).get("tags", [])
-    history = sorted((t for t in tags if t.startswith(prefix)))  # names embed short digest; sort for stability
+    # history tag names embed a UTC timestamp -> lexical sort IS chronological
+    history = sorted(t for t in tags if t.startswith(prefix))
     keep_tags = {spec.source.tag, *history[-(keep_latest - 1):]} if keep_latest > 1 else {spec.source.tag}
     kept_digests = set()
     for tag in keep_tags:
