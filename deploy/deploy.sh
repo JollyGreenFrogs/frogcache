@@ -129,7 +129,11 @@ for a in seed.get("artifacts", []):
     if existing is None or not existing.get("auto"):
         by_name[a.get("name")] = a
 live["artifacts"] = list(by_name.values())
-json.dump(live, open(path, "w"), indent=2)
+# atomic publish: sibling temp + replace while still holding the flock
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(live, fh, indent=2)
+os.replace(tmp, path)
 PYEOF'
     "${D[@]}" rm -f "$tmp" >/dev/null
 }
