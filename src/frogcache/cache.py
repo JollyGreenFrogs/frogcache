@@ -15,7 +15,26 @@ import shutil
 import urllib.request
 from pathlib import Path
 
+from frogcache.net import safe_url
 from frogcache.versions import is_newer, parse_version
+
+def safe_join(root: str, rel: str) -> Path:
+    """Join rel onto root, rejecting absolute paths and traversal outside root.
+
+    Args:
+        root: base directory (cache dir).
+        rel: relative path (may contain subdirs).
+    Returns:
+        Resolved path guaranteed to be inside root.
+    Raises:
+        RuntimeError: if the result escapes root.
+    """
+    base = Path(root).resolve()
+    target = (base / rel).resolve()
+    if target != base and base not in target.parents:
+        raise RuntimeError(f"path escapes cache root: {rel!r}")
+    return target
+
 
 WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)-[^-]+-[^-]+-[^-]+\.whl$")
 
@@ -76,11 +95,10 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     Raises:
         RuntimeError: on download failure (temp file is removed).
     """
-    dest_dir = Path(cache_dir)
-    dest = dest_dir / filename
+    dest = safe_join(cache_dir, filename)  # containment: filename may not escape
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.parent / f".{dest.name}.part"
-    request = urllib.request.Request(url, headers={"User-Agent": "frogcache/1.0"})
+    request = urllib.request.Request(safe_url(url), headers={"User-Agent": "frogcache/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
             digest = hashlib.sha256()

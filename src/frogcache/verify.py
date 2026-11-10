@@ -13,7 +13,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from frogcache.cache import download_atomic
+from frogcache.cache import download_atomic, safe_join
 
 GGUF_MAGIC = b"GGUF"
 
@@ -158,6 +158,8 @@ def verify_and_promote(
     Returns:
         (ok, sha256, digest_verified); ok=False -> quarantined, nothing recorded.
     """
+    dest = safe_join(str(dest.parent.parent), str(dest.relative_to(dest.parent.parent)))  # no-op guard
+    part = safe_join(str(part.parent), part.name)
     digest = sha256_file(part)
     try:
         digest_verified = verify_digest(part, expected_sha256, digest_required)

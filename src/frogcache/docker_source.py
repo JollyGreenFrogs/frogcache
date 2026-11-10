@@ -19,6 +19,13 @@ from frogcache import net
 from pathlib import Path
 
 from frogcache import audit, manifest, net, verify
+
+
+def _extra_hosts(config) -> set[str]:
+    """The configured private registry host is allowed over http on the LAN."""
+    if not getattr(config, "registry_addr", ""):
+        return set()
+    return {urllib.parse.urlparse(config.registry_addr).hostname or ""}
 from frogcache.data_models.artifact import ArtifactSpec, ManifestEntry, UpstreamRelease
 from frogcache.data_models.config import Config
 

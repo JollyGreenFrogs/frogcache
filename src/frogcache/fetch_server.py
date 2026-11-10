@@ -86,12 +86,11 @@ class _Handler(BaseHTTPRequestHandler):
     config: Config
 
     def _safe_target(self, path: str) -> Path | None:
-        """Resolve path inside the cache root; None if it escapes (traversal guard)."""
-        root = Path(self.config.cache_dir).resolve()
-        target = (root / path).resolve()
-        if target != root and root not in target.parents:
+        """Resolve path inside the cache root via safe_join; None if it escapes."""
+        try:
+            return cache.safe_join(self.config.cache_dir, path)
+        except RuntimeError:
             return None
-        return target
 
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
         path = self.path.lstrip("/")
