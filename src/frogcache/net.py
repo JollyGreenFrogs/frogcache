@@ -124,3 +124,12 @@ def fetch_json(url: str, token: str = "", timeout: int = 60) -> object:
         raise RuntimeError(f"GET {url} -> HTTP {err.code}") from err
     except urllib.error.URLError as err:
         raise RuntimeError(f"GET {url} failed: {err.reason}") from err
+
+
+def header(headers: dict, name: str) -> str:
+    """Case-insensitive header lookup (registry responses vary in case)."""
+    lname = name.lower()
+    for k, v in headers.items():
+        if k.lower() == lname:
+            return v
+    return ""

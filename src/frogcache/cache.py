@@ -36,7 +36,7 @@ def safe_join(root: str, rel: str) -> Path:
     return target
 
 
-WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)-[^-]+-[^-]+-[^-]+\.whl$")
+WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)(?:-(?P<build>\d[^-]*))?-[^-]+-[^-]+-[^-]+\.whl$")
 
 
 def parse_wheel_filename(filename: str) -> tuple[str, str] | None:
@@ -124,10 +124,17 @@ def apply_retention(cache_dir: str, name: str, keep: int, keep_extra: set[str] |
     """
     files = cached_files(cache_dir, name)  # newest first
     extra = keep_extra or set()
+    seen_versions: set[str] = set()
     removed = []
-    for version, filename in files[keep:]:
-        if version in extra:
-            continue  # protected (e.g. just-fetched pull-through version) — never delete
+    for version, filename in files:
+        if version in seen_versions:
+            # multi-platform wheel of an already-kept version: keep it (same version)
+            continue
+        if len(seen_versions) < keep or version in extra:
+            # window counts DISTINCT versions; keep_extra protects a version even
+            # outside the window (e.g. the just-fetched pull-through version)
+            seen_versions.add(version)
+            continue
         (Path(cache_dir) / filename).unlink(missing_ok=True)
         removed.append(filename)
     return removed
@@ -151,3 +158,13 @@ def retention_lock(files_dir: str):
     with open(path, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         yield
+
+
+def apply_retention_versions(cache_dir: str, name: str, keep_versions: set[str]) -> list[str]:
+    """Delete cached files of `name` whose version is not in keep_versions (DB-aligned)."""
+    removed = []
+    for version, filename in cached_files(cache_dir, name):
+        if version not in keep_versions:
+            (Path(cache_dir) / filename).unlink(missing_ok=True)
+            removed.append(filename)
+    return removed

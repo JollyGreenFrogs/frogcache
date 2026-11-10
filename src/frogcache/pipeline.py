@@ -4,6 +4,8 @@ download -> verify -> promote -> manifest -> retention, with audit logging.
 Governing ADRs: ADR-001/002/003/004.
 """
 
+import re
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -191,11 +193,32 @@ def fetch_exact_file(config: Config, path: str, spec, conn) -> Path | None:
         return dest
     if spec.source.type == "huggingface":
         parts = path.split("/")
-        # hf/<org>/<model>/<sha>/<file...>
+        # hf/<org>/<model>/<revision>/<file...>
         if len(parts) < 5:
             return None
-        repo, sha, rel = f"{parts[1]}/{parts[2]}", parts[3], "/".join(parts[4:])
-        url = f"https://huggingface.co/{repo}/resolve/{sha}/{rel}"
+        repo, rev, rel = f"{parts[1]}/{parts[2]}", parts[3], "/".join(parts[4:])
+        if any(seg in ("", ".", "..") for seg in rel.split("/")):
+            return None  # path traversal or empty segments are never served
+        # resolve a mutable revision (branch/tag like 'main') to its commit sha
+        # first: the cache key and the downloaded bytes must be the same commit
+        sha = rev
+        if not re.fullmatch(r"[0-9a-f]{40}", rev):
+            try:
+                info = hf.fetch_json(
+                    hf.HF_API_MODEL_URL.format(repo=repo) + "/revision/"
+                    + urllib.parse.quote(rev, safe=""),
+                    timeout=config.http_timeout,
+                )
+            except RuntimeError:
+                return None
+            sha = info.get("sha", "")
+            if not sha:
+                return None
+        dest = Path(config.cache_dir) / f"hf/{repo}/{sha}/{rel}"
+        url = (
+            f"https://huggingface.co/{repo}/resolve/{urllib.parse.quote(sha, safe='')}"
+            f"/{urllib.parse.quote(rel, safe='/')}"
+        )
         # upstream integrity: the tree entry's LFS oid for this exact file
         expected = ""
         try:

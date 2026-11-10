@@ -4,8 +4,9 @@
 #
 # Steps:
 #   1. create the data-server share dirs (+ the air-gapped sandbox volume)
-#   2. seed shares via a throwaway container bind mount + `docker cp`
-#      (seed/wheels -> frogcache-files, seed/artifacts.json -> frogcache-artifacts)
+#   2. migrate any legacy named volumes into the shares, then seed shares via
+#      a throwaway container bind mount + `docker cp`
+#      (seed/wheels -> files share, seed/artifacts.json -> artifacts share)
 #   3. idempotent ntfy publisher setup (user frogcache, topic $NTFY_TOPIC,
 #      token) and write the token into the secrets share (mode 600)
 #   4. ensure the updater image exists on the host (pull; build+push locally if missing)
@@ -90,6 +91,36 @@ open(p, "w").write("\n".join(lines) + "\n")
 import os as o; o.chmod(p, 0o600)'
 }
 
+validate_secrets() {
+    # fresh DATA_SHARE installs have no secrets yet — fail early with a clear
+    # message instead of containers crash-looping on a missing DATABASE_URL
+    local missing
+    missing="$("${D[@]}" run --rm -v "$DATA_SHARE/secrets:/secrets:ro" alpine \
+        sh -c 'for k in DATABASE_URL REGISTRY_ADDR REGISTRY_USER REGISTRY_PASS; do grep -q "^$k=" /secrets/frogcache.env 2>/dev/null || echo "$k"; done')"
+    if [[ -n "$missing" ]]; then
+        echo "ERROR: $DATA_SHARE/secrets/frogcache.env is missing required keys:" >&2
+        echo "$missing" | sed 's/^/  - /' >&2
+        echo "Write them there (mode 600) and re-run deploy.sh" >&2
+        exit 1
+    fi
+}
+
+migrate_volumes() {
+    # upgrade path: pre-ADR-003 deploys kept data in named volumes
+    # (frogcache-files/-artifacts/-data/-secrets); copy them into the shares
+    # before compose switches to bind mounts so nothing is lost
+    local entry vol sub
+    for entry in "frogcache-files:files" "frogcache-artifacts:artifacts" \
+                 "frogcache-data:data" "frogcache-secrets:secrets"; do
+        vol="${entry%%:*}"; sub="${entry##*:}"
+        if "${D[@]}" volume inspect "$vol" >/dev/null 2>&1; then
+            echo "== migrating named volume $vol -> $DATA_SHARE/$sub"
+            "${D[@]}" run --rm -v "$vol:/from:ro" -v "$DATA_SHARE/$sub:/to" alpine \
+                sh -c 'cp -a /from/. /to/'
+        fi
+    done
+}
+
 ensure_image() {
     if ! "${D[@]}" image inspect "$UPDATER_IMAGE" >/dev/null 2>&1; then
         echo "== image $UPDATER_IMAGE not on context $CONTEXT; building locally and pushing"
@@ -140,9 +171,11 @@ PYEOF'
 
 main() {
     create_shares
+    migrate_volumes      # named volumes -> data-server shares (upgrade path)
     seed_share files "$ROOT/seed/wheels" /cache
     seed_artifacts_file  # merge seed specs into the live artifacts.json; keep auto-added ones
     setup_ntfy_publisher
+    validate_secrets     # DATABASE_URL/REGISTRY_* must exist before compose up
     ensure_image
     UPDATER_IMAGE="$UPDATER_IMAGE" "${D[@]}" compose -f "$HERE/docker-compose.yml" up -d
     verify

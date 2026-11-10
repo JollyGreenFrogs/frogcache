@@ -74,7 +74,7 @@ def scan_malware(path: Path, timeout: int = 600) -> None:
     """
     try:
         result = subprocess.run(
-            ["clamscan", "--no-summary", str(path)],
+            ["clamscan", str(path)],
             capture_output=True,
             timeout=timeout,
         )
@@ -84,8 +84,12 @@ def scan_malware(path: Path, timeout: int = 600) -> None:
         ) from err
     except subprocess.TimeoutExpired as err:
         raise RuntimeError(f"clamscan timed out on {path.name}") from err
-    if result.returncode != 0:
-        raise RuntimeError(f"clamscan detected malware in {path.name}")
+    out = result.stdout.decode(errors="replace")
+    # clamscan exits 0 even when it SKIPS files (size/complexity limits), so a
+    # bare returncode check can pass a partial scan as clean — require the
+    # summary line "Infected files: 0" and no detection marker.
+    if result.returncode != 0 or "Infected files: 0" not in out or "FOUND" in out:
+        raise RuntimeError(f"clamscan detected malware or could not fully scan {path.name}")
 
 
 def _wheel_has_metadata(path: Path) -> bool:

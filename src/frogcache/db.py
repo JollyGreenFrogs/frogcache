@@ -29,7 +29,13 @@ def connect(dsn: str | None = None):
     dsn = dsn or os.environ.get("DATABASE_URL", "")
     if not dsn:
         raise RuntimeError("DATABASE_URL not set (secrets file / env)")
-    ini = Path(__file__).resolve().parents[2] / "alembic.ini"  # repo root, cwd-independent
+    here = Path(__file__).resolve()
+    # repo checkout: <root>/alembic.ini; installed wheel: site-packages/alembic.ini
+    # (packaged via hatch force-include, see pyproject.toml)
+    candidates = (here.parents[2] / "alembic.ini", here.parents[1] / "alembic.ini")
+    ini = next((p for p in candidates if p.is_file()), None)
+    if ini is None:
+        raise RuntimeError("alembic.ini not found (repo root or package install)")
     cfg = Config(str(ini))
     # SQLAlchemy 2.0 defaults to psycopg2 for postgresql:// — select psycopg3.
     # Escape % for ConfigParser interpolation; psycopg gets the original DSN.

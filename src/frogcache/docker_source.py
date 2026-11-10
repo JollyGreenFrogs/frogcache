@@ -54,6 +54,7 @@ def _upstream_token(registry: str, image: str) -> str:
 
 
 def latest_docker_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRelease | None:
+    net.register_extra_host(urllib.parse.urlparse(spec.source.upstream_registry).hostname)
     """Resolve the current manifest digest of the image:tag upstream.
 
     Returns:
@@ -70,7 +71,7 @@ def latest_docker_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRele
         return None
     if status != 200:
         raise RuntimeError(f"GET manifest {source.image}:{source.tag} -> HTTP {status}")
-    digest = resp_headers.get("Docker-Content-Digest", "")
+    digest = resp_net.header(headers, "Docker-Content-Digest") or ""
     return UpstreamRelease(version=digest or source.tag, url=url, filename="manifest.json",
                            sha256=digest)
 
@@ -139,14 +140,14 @@ def _pull_push_image(config: Config, spec: ArtifactSpec, release: UpstreamReleas
     # push manifest under the tag; keep the previous digest under <tag>-old-<short>
     status, resp, _ = _request(f"{base}/v2/{repo}/manifests/{source.tag}", headers={"Accept": MANIFEST_ACCEPT, "Authorization": auth}, timeout=config.http_timeout)
     if status == 200:
-        old_digest = resp.get("Docker-Content-Digest", "")
+        old_digest = net.header(resp, "Docker-Content-Digest") or ""
         if old_digest and old_digest != release.version:
             st, _, old_body = _request(f"{base}/v2/{repo}/manifests/{old_digest}", headers={"Accept": MANIFEST_ACCEPT, "Authorization": auth}, timeout=config.http_timeout)
             if st != 200:
                 raise RuntimeError(f"read rollback manifest -> HTTP {st}")
             hist_tag = f"{source.tag}-old-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{old_digest.split(':')[-1][:12]}"
             st, _, _ = _request(f"{base}/v2/{repo}/manifests/{hist_tag}", method="PUT",
-                               headers={"Authorization": auth, "Content-Type": resp.get("Content-Type", MANIFEST_ACCEPT.split(",")[0])},
+                               headers={"Authorization": auth, "Content-Type": net.header(resp, "Content-Type") or MANIFEST_ACCEPT.split(",")[0]},
                                data=old_body, timeout=config.http_timeout)
             if st not in (200, 201):
                 raise RuntimeError(f"write rollback manifest -> HTTP {st}")
@@ -197,13 +198,20 @@ def _prune_image_tags(config: Config, spec: ArtifactSpec, keep_latest: int) -> N
     for tag in tags:
         if tag in history and tag not in keep_tags:
             continue
-        _, headers, _ = _request(f"{base}/v2/{repo}/manifests/{tag}", headers={"Authorization": auth, "Accept": MANIFEST_ACCEPT}, timeout=config.http_timeout)
-        referenced.add(headers.get("Docker-Content-Digest", tag))
+        st, headers, body = _request(f"{base}/v2/{repo}/manifests/{tag}", headers={"Authorization": auth, "Accept": MANIFEST_ACCEPT}, timeout=config.http_timeout)
+        referenced.add(net.header(headers, "Docker-Content-Digest") or tag)
+        if st == 200:
+            try:
+                doc = json.loads(body)
+            except json.JSONDecodeError:
+                doc = {}
+            for child in doc.get("manifests", []):  # OCI index / manifest list children
+                referenced.add(child.get("digest", ""))
     for tag in history:
         if tag in keep_tags:
             continue
         _, headers, _ = _request(f"{base}/v2/{repo}/manifests/{tag}", headers={"Authorization": auth, "Accept": MANIFEST_ACCEPT}, timeout=config.http_timeout)
-        digest = headers.get("Docker-Content-Digest", tag)
+        digest = net.header(headers, "Docker-Content-Digest") or tag
         if digest in referenced:
             continue
         _request(f"{base}/v2/{repo}/manifests/{digest}", method="DELETE", headers={"Authorization": auth}, timeout=config.http_timeout)
@@ -260,7 +268,7 @@ def _push_blob_stream(base: str, repo: str, digest: str, file: Path, auth: str, 
         raise RuntimeError(f"registry connection failed: {err}") from err
     if resp.status != 202:
         raise RuntimeError(f"blob upload init -> HTTP {resp.status}")
-    location = resp.getheader("Location", "")
+    location = net.header(dict(resp.getheaders()), "Location")
     upload_url = urllib.parse.urlparse(location if location.startswith("http") else f"{base}{location}")
     # preserve the upload session query state (_state=...) and add the digest
     query = urllib.parse.parse_qsl(upload_url.query, keep_blank_values=True)
