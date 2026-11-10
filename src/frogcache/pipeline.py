@@ -171,7 +171,7 @@ def fetch_exact_file(config: Config, path: str, spec, conn) -> Path | None:
     Raises:
         RuntimeError: download/verification failed.
     """
-    dest = Path(config.cache_dir) / path
+    dest = cache.safe_join(config.cache_dir, path)  # sanitizer: rejects traversal
     if spec.source.type == "pypi":
         parsed = cache.parse_wheel_filename(path)
         if not parsed:
@@ -214,7 +214,7 @@ def fetch_exact_file(config: Config, path: str, spec, conn) -> Path | None:
             sha = info.get("sha", "")
             if not sha:
                 return None
-        dest = Path(config.cache_dir) / f"hf/{repo}/{sha}/{rel}"
+        dest = cache.safe_join(config.cache_dir, f"hf/{repo}/{sha}/{rel}")
         url = (
             f"https://huggingface.co/{repo}/resolve/{urllib.parse.quote(sha, safe='')}"
             f"/{urllib.parse.quote(rel, safe='/')}"
