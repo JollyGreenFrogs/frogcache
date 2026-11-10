@@ -9,13 +9,12 @@ Governing ADR: docs/decisions/ADR-001.
 """
 
 import hashlib
-import json
 import os
 import re
+import shutil
 import urllib.request
 from pathlib import Path
 
-from frogcache.data_models.artifact import ManifestEntry
 from frogcache.versions import is_newer, parse_version
 
 WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)-[^-]+-[^-]+-[^-]+\.whl$")
@@ -78,8 +77,9 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
         RuntimeError: on download failure (temp file is removed).
     """
     dest_dir = Path(cache_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    tmp = dest_dir / f".{filename}.part"
+    dest = dest_dir / filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".{dest.name}.part"
     request = urllib.request.Request(url, headers={"User-Agent": "frogcache/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
@@ -87,7 +87,6 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
             while chunk := response.read(1 << 20):
                 digest.update(chunk)
                 out.write(chunk)
-        dest = dest_dir / filename
         os.replace(tmp, dest)
         return dest, digest.hexdigest()
     except Exception as err:
@@ -111,40 +110,6 @@ def apply_retention(cache_dir: str, name: str, keep: int) -> list[str]:
         (Path(cache_dir) / filename).unlink(missing_ok=True)
         removed.append(filename)
     return removed
-
-
-def load_manifest(state_file: str) -> dict:
-    """Load the manifest JSON; missing/corrupt file -> empty manifest."""
-    try:
-        manifest = json.loads(Path(state_file).read_text())
-        manifest.setdefault("artifacts", {})
-        return manifest
-    except (OSError, json.JSONDecodeError):
-        return {"artifacts": {}}
-
-
-def save_manifest(state_file: str, manifest: dict) -> None:
-    """Persist the manifest atomically (temp file + rename)."""
-    path = Path(state_file)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(manifest, indent=2))
-    tmp.replace(path)
-
-
-def record_fetch(manifest: dict, name: str, entry: ManifestEntry, keep: int) -> None:
-    """Append a fetch entry to the manifest and prune entries beyond `keep`.
-
-    Args:
-        manifest: manifest dict (mutated).
-        name: normalized artifact name.
-        entry: ManifestEntry for the fetch.
-        keep: number of newest entries to retain for the artifact.
-    """
-    entries = manifest["artifacts"].setdefault(name, [])
-    entries.append(entry.__dict__)
-    entries.sort(key=lambda e: parse_version(e["version"]), reverse=True)
-    del entries[keep:]
 
 
 def is_update_available(latest_version: str, cache_dir: str, name: str) -> bool:

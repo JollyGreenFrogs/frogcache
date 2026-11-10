@@ -1,7 +1,7 @@
 # Contributing
 
 Read [docs/coding-standards.md](docs/coding-standards.md) before editing — it is
-the canonical house standard (synced from `<redacted-profile-repo>`). Key points
+the canonical house standard. Key points
 for this repo: Conventional Commits; PRs required for `main` (no direct pushes);
 Woodpecker CI only (`.woodpecker.yml`); functions over classes; models only in
 `src/frogcache/data_models/`; files under ~200 lines; docstrings with

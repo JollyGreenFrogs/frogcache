@@ -3,11 +3,11 @@
 # docker context named by $CONTEXT (rule #1: never ssh into servers).
 #
 # Steps:
-#   1. create the named volumes
-#   2. seed volumes via a throwaway container + `docker cp`
+#   1. create the data-server share dirs (+ the air-gapped sandbox volume)
+#   2. seed shares via a throwaway container bind mount + `docker cp`
 #      (seed/wheels -> frogcache-files, seed/artifacts.json -> frogcache-artifacts)
 #   3. idempotent ntfy publisher setup (user frogcache, topic $NTFY_TOPIC,
-#      token) and write the token into the frogcache-secrets volume (mode 600)
+#      token) and write the token into the secrets share (mode 600)
 #   4. ensure the updater image exists on the host (pull; build+push locally if missing)
 #   5. docker compose up -d
 #   6. verify the index serves the seeded wheel
@@ -26,31 +26,35 @@ set -euo pipefail
 CONTEXT="${CONTEXT:?set CONTEXT to the docker context name for the LAN host}"
 CACHE_HOST="${CACHE_HOST:?set CACHE_HOST to the LAN host/IP the cache is served on}"
 UPDATER_IMAGE="${UPDATER_IMAGE:?set UPDATER_IMAGE, e.g. <registry>/frogcache/updater:latest}"
+DATA_SHARE="${DATA_SHARE:?set DATA_SHARE to the mounted data-server share root on the docker host, e.g. /mnt/<data-share>}"
+export DATA_SHARE
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 D=(docker --context "$CONTEXT")
 CACHE_URL="http://${CACHE_HOST}:8091/"
 NTFY_TOPIC_URL="${NTFY_TOPIC_URL:-http://${CACHE_HOST}:8090/frogcache-updates}"
 # ACL topic must match the topic in the URL, otherwise the publisher token
-# would be saved but denied access on a deny-by-default ntfy server.
-NTFY_TOPIC="${NTFY_TOPIC:-$(basename "${NTFY_TOPIC_URL%/}")}"
+# would be saved but denied access on a deny-by-default ntfy server. Strip
+# any query/fragment (e.g. ?priority=high) before extracting the topic.
+NTFY_TOPIC_URL_PATH="${NTFY_TOPIC_URL%%[?#]*}"
+NTFY_TOPIC="${NTFY_TOPIC:-$(basename "${NTFY_TOPIC_URL_PATH%/}")}"
 [[ -n "$NTFY_TOPIC" ]] || { echo "ERROR: cannot derive ntfy topic from NTFY_TOPIC_URL='$NTFY_TOPIC_URL'" >&2; exit 1; }
 NTFY_CONTAINER="${NTFY_CONTAINER:-ntfy}"
 
-VOLUMES=(frogcache-files frogcache-artifacts frogcache-data frogcache-secrets)
-
-create_volumes() {
-    for vol in "${VOLUMES[@]}"; do
-        "${D[@]}" volume create "$vol" >/dev/null
-    done
+create_shares() {
+    # create share dirs ON THE DOCKER HOST via the context (DATA_SHARE is a
+    # host path there, not necessarily visible/writable on this client)
+    "${D[@]}" run --rm -v "$DATA_SHARE:/data" alpine mkdir -p /data/files /data/artifacts /data/data /data/secrets
+    # sandbox stays a named volume (air-gapped staging, never on the share)
+    "${D[@]}" volume create frogcache-sandbox >/dev/null
 }
 
-# seed_volume <volume> <local-dir> <container-path> — copy a local dir into a
-# named volume using a throwaway container (no ssh, no host paths).
-seed_volume() {
-    local vol="$1" src="$2" dest="$3" tmp
+# seed_share <share-subdir> <local-path> <container-path> — copy local content
+# into a real data-server share via a throwaway container bind mount (ADR-003 §C).
+seed_share() {
+    local sub="$1" src="$2" dest="$3" tmp
     tmp="frogcache-seed-$$"
-    "${D[@]}" create --name "$tmp" -v "$vol:$dest" alpine true >/dev/null
+    "${D[@]}" create --name "$tmp" -v "$DATA_SHARE/$sub:$dest" alpine true >/dev/null
     if [[ -d "$src" ]]; then
         "${D[@]}" cp "$src/." "$tmp:$dest"
     else
@@ -73,7 +77,7 @@ setup_ntfy_publisher() {
         exit 1
     fi
     printf 'NTFY_URL=%s\nNTFY_TOKEN=%s\n' "$NTFY_TOPIC_URL" "$token" \
-        | "${D[@]}" run --rm -i -v frogcache-secrets:/secrets alpine \
+        | "${D[@]}" run --rm -i -v "$DATA_SHARE/secrets:/secrets" alpine \
             sh -c 'cat > /secrets/frogcache.env && chmod 600 /secrets/frogcache.env'
 }
 
@@ -94,10 +98,38 @@ verify() {
     "${D[@]}" ps --format '{{.Names}}\t{{.Status}}' | grep -E '^frogcache(-updater)?\b'
 }
 
+# seed_artifacts_file — merge seed/artifacts.json into the share's artifacts.json
+# (by name); auto-added entries (auto:true) are preserved, never overwritten.
+# Merge runs on the CLIENT (python3 here), then docker cp into the share.
+seed_artifacts_file() {
+    local tmp merged
+    tmp="frogcache-seed-$$"
+    merged="$(mktemp)"
+    # read the live file from the share if present (started throwaway container)
+    if "${D[@]}" run --rm -v "$DATA_SHARE/artifacts:/artifacts" alpine cat /artifacts/artifacts.json > "$merged" 2>/dev/null; then
+        python3 - "$merged" "$ROOT/seed/artifacts.json" <<'PYEOF'
+import json, sys
+live = json.load(open(sys.argv[1]))
+seed = json.load(open(sys.argv[2]))
+names = {a.get("name") for a in live.get("artifacts", [])}
+for a in seed.get("artifacts", []):
+    if a.get("name") not in names:
+        live.setdefault("artifacts", []).append(a)
+json.dump(live, open(sys.argv[1], "w"), indent=2)
+PYEOF
+    else
+        cp "$ROOT/seed/artifacts.json" "$merged"
+    fi
+    "${D[@]}" create --name "$tmp" -v "$DATA_SHARE/artifacts:/artifacts" alpine true >/dev/null
+    "${D[@]}" cp "$merged" "$tmp:/artifacts/artifacts.json"
+    "${D[@]}" rm "$tmp" >/dev/null
+    rm -f "$merged"
+}
+
 main() {
-    create_volumes
-    seed_volume frogcache-files "$ROOT/seed/wheels" /cache
-    seed_volume frogcache-artifacts "$ROOT/seed/artifacts.json" /artifacts
+    create_shares
+    seed_share files "$ROOT/seed/wheels" /cache
+    seed_artifacts_file  # merge seed specs into the live artifacts.json; keep auto-added ones
     setup_ntfy_publisher
     ensure_image
     UPDATER_IMAGE="$UPDATER_IMAGE" "${D[@]}" compose -f "$HERE/docker-compose.yml" up -d

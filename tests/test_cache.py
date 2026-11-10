@@ -2,7 +2,7 @@
 
 import json
 
-from frogcache import cache
+from frogcache import cache, manifest
 from frogcache.data_models.artifact import ManifestEntry
 
 
@@ -50,7 +50,7 @@ def test_apply_retention_keeps_latest_and_latest_minus_1(tmp_path):
     ]
 
 
-def test_download_atomic_and_manifest(tmp_path, tmp_path_factory):
+def test_download_atomic_and_manifest(tmp_path, tmp_path_factory, db_conn):
     payload = tmp_path_factory.mktemp("src") / "file.whl"
     payload.write_bytes(b"hello wheel")
     cache_dir = tmp_path / "cache"
@@ -60,16 +60,15 @@ def test_download_atomic_and_manifest(tmp_path, tmp_path_factory):
     assert len(sha256) == 64
     assert not list(cache_dir.glob(".*.part"))
 
-    state = tmp_path / "manifest.json"
-    manifest = cache.load_manifest(str(state))
-    cache.record_fetch(
-        manifest,
+    conn = db_conn
+    manifest.record_fetch(
+        conn,
         "a",
         ManifestEntry(version="1.0", filename=path.name, sha256=sha256, source="pypi", url=""),
         keep=2,
     )
-    cache.save_manifest(str(state), manifest)
-    assert json.loads(state.read_text())["artifacts"]["a"][0]["sha256"] == sha256
+    rows = manifest.entries(conn, "a")
+    assert rows[0]["sha256"] == sha256 and rows[0]["digest_verified"] == 0
 
 
 def test_is_update_available(tmp_path):

@@ -22,6 +22,14 @@ Facts and constraints:
   on the LAN host goes through `docker --context <name>` (exec/cp/volume/compose).
   No host bind paths from client machines; content lives in named docker
   volumes seeded via a throwaway container + `docker cp`.
+  **Note (2026-11-09): the "named volumes only, no host bind paths" constraint
+  above is superseded by ADR-003** — frogcache data moves to real shares on the
+  LAN data server (`<data-share>`, bind-mounted into the containers from the
+  data server itself, never from client machines) so it is backed up and
+  redundant.
+  **Note (2026-11-09): downloads are staged and verified first** — every fetch
+  lands in an air-gapped sandbox volume, passes digest + ClamAV + format
+  checks, and is only then promoted to the data-share cache (ADR-003 §D).
 - The LAN server (a NAS) already runs ntfy (host port **8090**) and a private
   docker registry (host port **5005**), plus monitoring and other services.
   (Hostnames/IPs are deliberately not recorded in this public repo — pass them
