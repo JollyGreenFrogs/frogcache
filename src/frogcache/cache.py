@@ -100,7 +100,7 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     """
     # strict filename guard: flat name only, no separators/traversal — this is
     # the sanitizer the path-injection query recognizes; safe_join re-checks
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", filename):
+    if not re.fullmatch(r"[A-Za-z0-9._+-]+", filename) or filename in (".", ".."):
         raise RuntimeError(f"unsafe download filename: {filename!r}")
     dest = safe_join(cache_dir, filename)  # containment: filename may not escape
     # tmp name comes from a uuid (not from the tainted filename) so no path op
