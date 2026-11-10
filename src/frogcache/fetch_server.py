@@ -120,15 +120,11 @@ class _Handler(BaseHTTPRequestHandler):
             with _SPEC_LOCK:
                 append_auto_spec(self.config, spec, conn)  # only after successful promote
             # serve the PROMOTED path (HF mutable revisions are stored under the
-            # resolved sha dir, which differs from the requested path).
-            # fetch_exact_file builds it via cache.safe_join; re-verify
-            # containment here before opening.
-            cache_root = Path(self.config.cache_dir).resolve()
-            if cache_root not in promoted.resolve().parents:
-                self.send_error(404)
-                return
-            target = promoted
-            if not target.is_file():
+            # resolved sha dir, which differs from the requested path) — route
+            # it back through safe_join so only a containment-checked path is
+            # ever opened
+            target = self._safe_target(str(promoted))
+            if target is None or not target.is_file():
                 self.send_error(404)
                 return
         self.send_response(200)
