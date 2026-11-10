@@ -143,6 +143,7 @@ def verify_and_promote(
     expected_sha256: str = "",
     quarantine: Path | None = None,
     digest_required: bool = False,
+    root: str = "/",
 ) -> tuple[bool, str, bool]:
     """Verify a sandbox .part file (digest → AV → format), then promote to dest.
 
@@ -158,8 +159,8 @@ def verify_and_promote(
     Returns:
         (ok, sha256, digest_verified); ok=False -> quarantined, nothing recorded.
     """
-    dest = safe_join(str(dest.parent.parent), str(dest.relative_to(dest.parent.parent)))  # no-op guard
-    part = safe_join(str(part.parent), part.name)
+    dest = safe_join(root, os.path.relpath(dest, root))  # real containment check
+    part = safe_join(str(part.parent.parent), str(part.relative_to(part.parent.parent)))
     digest = sha256_file(part)
     try:
         digest_verified = verify_digest(part, expected_sha256, digest_required)
@@ -196,6 +197,7 @@ def fetch_and_promote(
     expected_sha256: str = "",
     quarantine: Path | None = None,
     digest_required: bool = False,
+    root: str = "/",
 ) -> tuple[bool, str, bool]:
     """Download url into the sandbox, verify, then promote to dest (ADR-003 §D).
 
@@ -216,6 +218,6 @@ def fetch_and_promote(
     stage.mkdir(parents=True, exist_ok=True)
     part, _ = download_atomic(url, str(stage), f"{dest.name}.part", timeout)
     try:
-        return verify_and_promote(part, dest, expected_sha256, quarantine, digest_required)
+        return verify_and_promote(part, dest, expected_sha256, quarantine, digest_required, root=root)
     finally:
         shutil.rmtree(stage, ignore_errors=True)  # sandbox stays temporary

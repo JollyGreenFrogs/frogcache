@@ -236,6 +236,7 @@ def _copy_descriptors(config, spec, release, doc, headers, base, repo, auth, con
         ok, _, verified = verify.verify_and_promote(
             part, staged, expected_sha256=digest.split(":")[-1],
             quarantine=Path(config.quarantine_dir), digest_required=True,
+            root=config.sandbox_dir,
         )
         if not ok:
             raise RuntimeError(f"blob {digest[:19]} failed verification; quarantined")

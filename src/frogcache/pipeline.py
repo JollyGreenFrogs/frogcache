@@ -45,6 +45,7 @@ def _stage_and_promote(config: Config, url: str, dest: Path, expected_sha256: st
         expected_sha256=expected_sha256,
         quarantine=Path(config.quarantine_dir),
         digest_required=digest_required,
+        root=config.cache_dir,
     )
     if not ok:
         raise RuntimeError(f"verification failed for {dest.name}; quarantined, not served")
