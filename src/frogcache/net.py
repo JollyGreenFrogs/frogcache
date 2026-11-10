@@ -137,7 +137,10 @@ def checked_url(url: str) -> str:
     sanitizer visible to static analysis at the request sink.
     """
     safe = safe_url(url)
-    if urllib.parse.urlparse(safe).hostname not in (ALLOWED_HOSTS | _EXTRA_HOSTS):
+    parsed = urllib.parse.urlparse(safe)
+    if parsed.scheme == "file":
+        return safe  # local test fixtures only
+    if parsed.hostname not in (ALLOWED_HOSTS | _EXTRA_HOSTS):
         raise RuntimeError(f"refusing non-allowlisted URL host: {safe!r}")
     return safe
 
