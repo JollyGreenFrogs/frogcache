@@ -99,7 +99,8 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     """
     dest = safe_join(cache_dir, filename)  # containment: filename may not escape
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.parent / f".{dest.name}.part"
+    # tmp must itself be a safe_join result so every path op on it is sanitized
+    tmp = safe_join(str(dest.parent), f".{dest.name}.part")
     request = urllib.request.Request(safe_url(url), headers={"User-Agent": "frogcache/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
