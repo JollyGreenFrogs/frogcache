@@ -130,6 +130,18 @@ def safe_url(url: str, extra_hosts: set[str] | None = None) -> str:
 
 
 
+def checked_url(url: str) -> str:
+    """safe_url plus an INLINE hostname allowlist check at the point of use.
+
+    safe_url already enforces the allowlist; the inline re-check makes the
+    sanitizer visible to static analysis at the request sink.
+    """
+    safe = safe_url(url)
+    if urllib.parse.urlparse(safe).hostname not in (ALLOWED_HOSTS | _EXTRA_HOSTS):
+        raise RuntimeError(f"refusing non-allowlisted URL host: {safe!r}")
+    return safe
+
+
 def fetch_json(url: str, token: str = "", timeout: int = 60) -> object:
     """GET a URL and return the decoded JSON body.
 
@@ -146,7 +158,7 @@ def fetch_json(url: str, token: str = "", timeout: int = 60) -> object:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        with SAFE_OPENER.open(urllib.request.Request(safe_url(url), headers=headers), timeout=timeout) as response:
+        with SAFE_OPENER.open(urllib.request.Request(checked_url(url), headers=headers), timeout=timeout) as response:
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as err:
         raise RuntimeError(f"GET {url} -> HTTP {err.code}") from err

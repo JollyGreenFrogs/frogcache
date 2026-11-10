@@ -72,6 +72,9 @@ def scan_malware(path: Path, timeout: int = 600) -> None:
     Raises:
         RuntimeError: clamscan missing, or malware detected.
     """
+    # re-derive through safe_join so the value handed to the subprocess sink is
+    # the direct output of the containment guard
+    path = safe_join(str(path.parent), path.name)
     if path.is_symlink() or not path.is_file():
         raise RuntimeError(f"refusing to scan non-regular file {path.name}")
     try:
