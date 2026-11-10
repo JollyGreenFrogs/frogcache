@@ -119,8 +119,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             with _SPEC_LOCK:
                 append_auto_spec(self.config, spec, conn)  # only after successful promote
-            target = self._safe_target(path)
-            if target is None or not target.is_file():
+            # serve the PROMOTED path (HF mutable revisions resolve to a sha dir,
+            # which differs from the requested path) after a containment check
+            cache_root = Path(self.config.cache_dir).resolve()
+            target = promoted.resolve()
+            if cache_root not in target.parents or not target.is_file():
                 self.send_error(404)
                 return
         self.send_response(200)

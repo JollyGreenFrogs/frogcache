@@ -106,18 +106,27 @@ validate_secrets() {
 }
 
 migrate_volumes() {
-    # upgrade path: pre-ADR-003 deploys kept data in named volumes
-    # (frogcache-files/-artifacts/-data/-secrets); copy them into the shares
-    # before compose switches to bind mounts so nothing is lost
-    local entry vol sub
-    for entry in "frogcache-files:files" "frogcache-artifacts:artifacts" \
-                 "frogcache-data:data" "frogcache-secrets:secrets"; do
-        vol="${entry%%:*}"; sub="${entry##*:}"
-        if "${D[@]}" volume inspect "$vol" >/dev/null 2>&1; then
-            echo "== migrating named volume $vol -> $DATA_SHARE/$sub"
-            "${D[@]}" run --rm -v "$vol:/from:ro" -v "$DATA_SHARE/$sub:/to" alpine \
-                sh -c 'cp -a /from/. /to/'
+    # upgrade path: pre-ADR-003 deploys kept data in COMPOSE PROJECT-SCOPED
+    # named volumes (e.g. deploy_frogcache-files), not bare names — discover
+    # the actual volume names. Each migration is ONE-TIME (durable marker in
+    # the share) and never overwrites existing share files (cp -n), so
+    # redeploys can't erase auto-added specs, replace secrets, or restore
+    # pruned files.
+    local sub vol found
+    for sub in files artifacts data secrets; do
+        if "${D[@]}" run --rm -v "$DATA_SHARE/$sub:/to" alpine test -f /to/.migrated-from-volume; then
+            continue  # already migrated on a previous deploy
         fi
+        found=""
+        while IFS= read -r vol; do
+            if [[ "$vol" == "frogcache-$sub" || "$vol" == *_"frogcache-$sub" ]]; then
+                found="$vol"; break
+            fi
+        done < <("${D[@]}" volume ls --format '{{.Name}}')
+        [[ -n "$found" ]] || continue
+        echo "== migrating named volume $found -> $DATA_SHARE/$sub (one-time)"
+        "${D[@]}" run --rm -v "$found:/from:ro" -v "$DATA_SHARE/$sub:/to" alpine \
+            sh -c 'cp -a -n /from/. /to/ && touch /to/.migrated-from-volume'
     done
 }
 

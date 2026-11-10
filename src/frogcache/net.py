@@ -65,10 +65,24 @@ def register_extra_host(host: str | None) -> None:
         _EXTRA_HOSTS.add(host)
 
 
+_REGISTRY_HOST: str | None = None
+
+
+def set_registry_host(host: str | None) -> None:
+    """Track the PRIVATE registry host separately from the general allowlist.
+
+    The private registry is the only host allowed plain http (LAN); upstream
+    registries registered via register_extra_host stay https-only.
+    """
+    global _REGISTRY_HOST
+    if host:
+        _REGISTRY_HOST = host
+
+
 def _configured_registry_host() -> str | None:
-    """Private registry host: registered via Config first, then REGISTRY_ADDR env."""
-    if _EXTRA_HOSTS:
-        return next(iter(_EXTRA_HOSTS))
+    """Private registry host: set via set_registry_host (Config), else REGISTRY_ADDR env."""
+    if _REGISTRY_HOST:
+        return _REGISTRY_HOST
     addr = os.environ.get("REGISTRY_ADDR", "")
     return urllib.parse.urlparse(addr).hostname if addr else None
 
@@ -87,13 +101,15 @@ def safe_url(url: str, extra_hosts: set[str] | None = None) -> str:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme == "file":
         return url  # local test fixtures only
-    allowed = ALLOWED_HOSTS | (extra_hosts or set())
-    reg_host = _configured_registry_host()
-    if reg_host:
-        allowed.add(reg_host)
+    # allowlist membership is checked against the COMPLETE registered set —
+    # several extra hosts (private registry + multiple upstream registries) may
+    # be registered at once
+    allowed = ALLOWED_HOSTS | _EXTRA_HOSTS | (extra_hosts or set())
     if parsed.hostname not in allowed or parsed.scheme not in ("https", "http"):
         raise RuntimeError(f"refusing non-allowlisted URL host: {parsed.hostname!r}")
-    is_registry = parsed.hostname in (extra_hosts or set()) or parsed.hostname == _configured_registry_host()
+    # plain http is allowed ONLY for the configured private registry, which is
+    # tracked separately (not an arbitrary registered host)
+    is_registry = parsed.hostname == _configured_registry_host()
     if parsed.scheme == "http" and not is_registry:
         raise RuntimeError(f"http only allowed for the private registry, not {parsed.hostname!r}")
     scheme = parsed.scheme if is_registry else "https"  # registry may be plain http on the LAN

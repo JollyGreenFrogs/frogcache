@@ -71,7 +71,7 @@ def latest_docker_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRele
         return None
     if status != 200:
         raise RuntimeError(f"GET manifest {source.image}:{source.tag} -> HTTP {status}")
-    digest = resp_net.header(headers, "Docker-Content-Digest") or ""
+    digest = net.header(resp_headers, "Docker-Content-Digest") or ""
     return UpstreamRelease(version=digest or source.tag, url=url, filename="manifest.json",
                            sha256=digest)
 

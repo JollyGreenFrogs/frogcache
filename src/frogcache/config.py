@@ -68,5 +68,9 @@ def load_config() -> Config:
     )
     config.validate()
     if config.registry_addr:
-        net.register_extra_host(__import__("urllib.parse", fromlist=["urlparse"]).urlparse(config.registry_addr).hostname)
+        import urllib.parse
+
+        host = urllib.parse.urlparse(config.registry_addr).hostname
+        net.register_extra_host(host)
+        net.set_registry_host(host)
     return config
