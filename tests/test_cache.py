@@ -76,3 +76,12 @@ def test_is_update_available(tmp_path):
     _touch_wheel(tmp_path, "en_core_web_sm", "3.8.0")
     assert not cache.is_update_available("3.8.0", str(tmp_path), "en-core-web-sm")
     assert cache.is_update_available("3.9.0", str(tmp_path), "en-core-web-sm")
+
+
+def test_apply_retention_never_deletes_keep_extra(tmp_path):
+    for v in ("1.0", "2.0", "3.0"):
+        _touch_wheel(tmp_path, "pkg", v)
+    removed = cache.apply_retention(str(tmp_path), "pkg", keep=2, keep_extra={"3.0"})
+    assert removed == ["pkg-1.0-py3-none-any.whl"]
+    remaining = sorted(p.name for p in tmp_path.glob("*.whl"))
+    assert remaining == ["pkg-2.0-py3-none-any.whl", "pkg-3.0-py3-none-any.whl"]

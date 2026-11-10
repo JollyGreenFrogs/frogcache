@@ -109,13 +109,15 @@ verify() {
 
 # seed_artifacts_file — merge seed/artifacts.json into the share's artifacts.json.
 # Seed entries override same-name non-auto entries; auto:true entries are kept.
-# Runs in a python:3.15-alpine container (always pullable) holding flock on the
-# share .lock; the seed file is docker cp'd in (client paths are not on the host).
+# The seed file is docker cp'd into a created container that is then STARTED and
+# exec'd (create alone leaves it stopped); flock on the share .lock serializes
+# against the running fetcher.
 seed_artifacts_file() {
     local tmp
     tmp="frogcache-seed-$$"
-    "${D[@]}" create --name "$tmp" -v "$DATA_SHARE/artifacts:/artifacts" python:3.15-alpine true >/dev/null
+    "${D[@]}" create --name "$tmp" -v "$DATA_SHARE/artifacts:/artifacts" python:3.15-alpine sleep 300 >/dev/null
     "${D[@]}" cp "$ROOT/seed/artifacts.json" "$tmp:/seed-artifacts.json"
+    "${D[@]}" start "$tmp" >/dev/null
     "${D[@]}" exec "$tmp" sh -c 'flock -x /artifacts/.lock python3 - /seed-artifacts.json <<'"'"'PYEOF'"'"'
 import json, os, sys
 path = "/artifacts/artifacts.json"
@@ -125,11 +127,11 @@ by_name = {a.get("name"): a for a in live.get("artifacts", [])}
 for a in seed.get("artifacts", []):
     existing = by_name.get(a.get("name"))
     if existing is None or not existing.get("auto"):
-        by_name[a.get("name")] = a  # seed is authoritative for non-auto entries
+        by_name[a.get("name")] = a
 live["artifacts"] = list(by_name.values())
 json.dump(live, open(path, "w"), indent=2)
 PYEOF'
-    "${D[@]}" rm "$tmp" >/dev/null
+    "${D[@]}" rm -f "$tmp" >/dev/null
 }
 
 main() {

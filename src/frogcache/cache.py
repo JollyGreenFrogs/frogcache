@@ -122,11 +122,12 @@ def apply_retention(cache_dir: str, name: str, keep: int, keep_extra: set[str] |
     Returns:
         Filenames that were deleted.
     """
-    files = cached_files(cache_dir, name)
+    files = cached_files(cache_dir, name)  # newest first
     extra = keep_extra or set()
-    files = [f for f in files if f[0] not in extra] + [f for f in files if f[0] in extra]
     removed = []
-    for _, filename in files[keep:]:
+    for version, filename in files[keep:]:
+        if version in extra:
+            continue  # protected (e.g. just-fetched pull-through version) — never delete
         (Path(cache_dir) / filename).unlink(missing_ok=True)
         removed.append(filename)
     return removed
