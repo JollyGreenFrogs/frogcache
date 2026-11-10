@@ -123,7 +123,7 @@ def latest_github_release(spec: ArtifactSpec, token: str, timeout: int) -> Upstr
     )
     if asset is None:
         return None
-    digest = asset.get("digest", "")  # 'sha256:...' when the API provides it
+    digest = asset.get("digest") or ""  # None-safe: asset digest may be null
     if digest.startswith("sha256:"):
         digest = digest[len("sha256:"):]
     return UpstreamRelease(

@@ -112,7 +112,7 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
         raise RuntimeError(f"download {url} failed: {err}") from err
 
 
-def apply_retention(cache_dir: str, name: str, keep: int) -> list[str]:
+def apply_retention(cache_dir: str, name: str, keep: int, keep_extra: set[str] | None = None) -> list[str]:
     """Delete all but the newest `keep` cached files for an artifact.
 
     Args:
@@ -123,6 +123,8 @@ def apply_retention(cache_dir: str, name: str, keep: int) -> list[str]:
         Filenames that were deleted.
     """
     files = cached_files(cache_dir, name)
+    extra = keep_extra or set()
+    files = [f for f in files if f[0] not in extra] + [f for f in files if f[0] in extra]
     removed = []
     for _, filename in files[keep:]:
         (Path(cache_dir) / filename).unlink(missing_ok=True)
@@ -134,3 +136,17 @@ def is_update_available(latest_version: str, cache_dir: str, name: str) -> bool:
     """Return True if latest_version is newer than the newest cached version."""
     cached = newest_cached_version(cache_dir, name)
     return cached is None or is_newer(latest_version, cached)
+
+
+import contextlib
+import fcntl
+
+
+@contextlib.contextmanager
+def retention_lock(files_dir: str):
+    """Cross-process lock on the files share so updater/fetcher retention never races."""
+    path = Path(files_dir).resolve() / ".retention.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield

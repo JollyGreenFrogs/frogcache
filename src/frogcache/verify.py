@@ -117,7 +117,7 @@ def check_format(path: Path) -> None:
         try:
             json.loads(path.read_text())
             ok = True
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             ok = False
     elif name.endswith(".gguf"):
         with open(path, "rb") as fh:
@@ -175,6 +175,8 @@ def verify_and_promote(
     tmp = dest.parent / f".{dest.name}.{uuid.uuid4().hex}.part"
     try:
         shutil.copyfile(part, tmp)
+        if sha256_file(tmp) != digest:
+            raise RuntimeError(f"copy of {dest.name} failed re-hash (sandbox digest mismatch)")
         if digest_verified and sha256_file(tmp) != expected_sha256.lower():
             raise RuntimeError(f"copy of {dest.name} failed digest re-check")
         os.replace(tmp, dest)

@@ -76,9 +76,18 @@ setup_ntfy_publisher() {
         echo "ERROR: could not obtain ntfy token for user frogcache" >&2
         exit 1
     fi
-    printf 'NTFY_URL=%s\nNTFY_TOKEN=%s\n' "$NTFY_TOPIC_URL" "$token" \
-        | "${D[@]}" run --rm -i -v "$DATA_SHARE/secrets:/secrets" alpine \
-            sh -c 'cat > /secrets/frogcache.env && chmod 600 /secrets/frogcache.env'
+    # merge NTFY vars into the existing secrets file (keep DATABASE_URL/REGISTRY_*)
+    "${D[@]}" run --rm -i -v "$DATA_SHARE/secrets:/secrets" -e NTFY_TOPIC_URL="$NTFY_TOPIC_URL" -e NTFY_TOKEN="$token" python:3.15-alpine \
+        python3 -c 'import os
+p = "/secrets/frogcache.env"
+lines = []
+try:
+    lines = [l for l in open(p).read().splitlines() if l and not l.startswith(("NTFY_URL=", "NTFY_TOKEN="))]
+except FileNotFoundError:
+    pass
+lines += [f"NTFY_URL={os.environ["NTFY_TOPIC_URL"]}", f"NTFY_TOKEN={os.environ["NTFY_TOKEN"]}"]
+open(p, "w").write("\n".join(lines) + "\n")
+import os as o; o.chmod(p, 0o600)'
 }
 
 ensure_image() {
@@ -98,29 +107,29 @@ verify() {
     "${D[@]}" ps --format '{{.Names}}\t{{.Status}}' | grep -E '^frogcache(-updater)?\b'
 }
 
-# seed_artifacts_file — merge seed/artifacts.json into the share's artifacts.json
-# (by name); auto-added entries (auto:true) are preserved. Runs SERVER-SIDE in a
-# throwaway updater-image container holding flock on the share's .lock, so a
-# running fetcher's auto-add can never be lost mid-redeploy (ADR-003 §A).
+# seed_artifacts_file — merge seed/artifacts.json into the share's artifacts.json.
+# Seed entries override same-name non-auto entries; auto:true entries are kept.
+# Runs in a python:3.15-alpine container (always pullable) holding flock on the
+# share .lock; the seed file is docker cp'd in (client paths are not on the host).
 seed_artifacts_file() {
-    "${D[@]}" run --rm \
-        -v "$DATA_SHARE/artifacts:/artifacts" -v "$ROOT/seed:/seed:ro" \
-        -e PYTHONPATH=/app/src "$UPDATER_IMAGE" \
-        sh -c 'flock -x /artifacts/.lock python3 - /seed/artifacts.json <<'"'"'PYEOF'"'"'
-import fcntl, json, sys
-# lock already held by flock(1) on .lock
+    local tmp
+    tmp="frogcache-seed-$$"
+    "${D[@]}" create --name "$tmp" -v "$DATA_SHARE/artifacts:/artifacts" python:3.15-alpine true >/dev/null
+    "${D[@]}" cp "$ROOT/seed/artifacts.json" "$tmp:/seed-artifacts.json"
+    "${D[@]}" exec "$tmp" sh -c 'flock -x /artifacts/.lock python3 - /seed-artifacts.json <<'"'"'PYEOF'"'"'
+import json, os, sys
 path = "/artifacts/artifacts.json"
-if __import__("os").path.exists(path):
-    live = json.load(open(path))
-else:
-    live = {"artifacts": []}
+live = json.load(open(path)) if os.path.exists(path) else {"artifacts": []}
 seed = json.load(open(sys.argv[1]))
-names = {a.get("name") for a in live.get("artifacts", [])}
+by_name = {a.get("name"): a for a in live.get("artifacts", [])}
 for a in seed.get("artifacts", []):
-    if a.get("name") not in names:
-        live.setdefault("artifacts", []).append(a)
+    existing = by_name.get(a.get("name"))
+    if existing is None or not existing.get("auto"):
+        by_name[a.get("name")] = a  # seed is authoritative for non-auto entries
+live["artifacts"] = list(by_name.values())
 json.dump(live, open(path, "w"), indent=2)
 PYEOF'
+    "${D[@]}" rm "$tmp" >/dev/null
 }
 
 main() {

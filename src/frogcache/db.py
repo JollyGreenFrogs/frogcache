@@ -8,6 +8,7 @@ Governing ADRs: docs/decisions/ADR-003 §C, ADR-004.
 """
 
 import os
+from pathlib import Path
 
 import psycopg
 from alembic import command
@@ -28,11 +29,19 @@ def connect(dsn: str | None = None):
     dsn = dsn or os.environ.get("DATABASE_URL", "")
     if not dsn:
         raise RuntimeError("DATABASE_URL not set (secrets file / env)")
-    cfg = Config("alembic.ini")
+    ini = Path(__file__).resolve().parents[2] / "alembic.ini"  # repo root, cwd-independent
+    cfg = Config(str(ini))
     # SQLAlchemy 2.0 defaults to psycopg2 for postgresql:// — select psycopg3.
     # Escape % for ConfigParser interpolation; psycopg gets the original DSN.
     sa_dsn = dsn.replace("postgresql://", "postgresql+psycopg://", 1)
     cfg.set_main_option("sqlalchemy.url", sa_dsn.replace("%", "%%"))
-    command.upgrade(cfg, "head")
+    # serialize concurrent migrators (updater + fetch threads) with a PG advisory lock
+    lock_conn = psycopg.connect(dsn)
+    lock_conn.execute("SELECT pg_advisory_lock(hashtext('frogcache_migrations'))")
+    try:
+        command.upgrade(cfg, "head")
+    finally:
+        lock_conn.execute("SELECT pg_advisory_unlock(hashtext('frogcache_migrations'))")
+        lock_conn.close()
     conn = psycopg.connect(dsn, row_factory=dict_row)
     return conn

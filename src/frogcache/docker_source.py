@@ -141,9 +141,15 @@ def _pull_push_image(config: Config, spec: ArtifactSpec, release: UpstreamReleas
     if status == 200:
         old_digest = resp.get("Docker-Content-Digest", "")
         if old_digest and old_digest != release.version:
-            _request(f"{base}/v2/{repo}/manifests/{source.tag}-old-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{old_digest.split(':')[-1][:12]}", method="PUT",
-                     headers={"Authorization": auth, "Content-Type": resp.get("Content-Type", MANIFEST_ACCEPT.split(",")[0])},
-                     data=_request(f"{base}/v2/{repo}/manifests/{old_digest}", headers={"Accept": MANIFEST_ACCEPT, "Authorization": auth}, timeout=config.http_timeout)[2], timeout=config.http_timeout)
+            st, _, old_body = _request(f"{base}/v2/{repo}/manifests/{old_digest}", headers={"Accept": MANIFEST_ACCEPT, "Authorization": auth}, timeout=config.http_timeout)
+            if st != 200:
+                raise RuntimeError(f"read rollback manifest -> HTTP {st}")
+            hist_tag = f"{source.tag}-old-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{old_digest.split(':')[-1][:12]}"
+            st, _, _ = _request(f"{base}/v2/{repo}/manifests/{hist_tag}", method="PUT",
+                               headers={"Authorization": auth, "Content-Type": resp.get("Content-Type", MANIFEST_ACCEPT.split(",")[0])},
+                               data=old_body, timeout=config.http_timeout)
+            if st not in (200, 201):
+                raise RuntimeError(f"write rollback manifest -> HTTP {st}")
     status, _, _ = _request(f"{base}/v2/{repo}/manifests/{source.tag}", method="PUT",
                            headers={"Authorization": auth, "Content-Type": doc.get("mediaType", "application/vnd.docker.distribution.manifest.v2+json")},
                            data=body, timeout=config.http_timeout)
@@ -186,17 +192,19 @@ def _prune_image_tags(config: Config, spec: ArtifactSpec, keep_latest: int) -> N
     # history tag names embed a UTC timestamp -> lexical sort IS chronological
     history = sorted(t for t in tags if t.startswith(prefix))
     keep_tags = {spec.source.tag, *history[-(keep_latest - 1):]} if keep_latest > 1 else {spec.source.tag}
-    kept_digests = set()
-    for tag in keep_tags:
-        if tag in tags:
-            _, headers, _ = _request(f"{base}/v2/{repo}/manifests/{tag}", headers={"Authorization": auth, "Accept": MANIFEST_ACCEPT}, timeout=config.http_timeout)
-            kept_digests.add(headers.get("Docker-Content-Digest", tag))
+    # digests referenced by ANY tag that will remain (not just kept ones)
+    referenced = set()
+    for tag in tags:
+        if tag in history and tag not in keep_tags:
+            continue
+        _, headers, _ = _request(f"{base}/v2/{repo}/manifests/{tag}", headers={"Authorization": auth, "Accept": MANIFEST_ACCEPT}, timeout=config.http_timeout)
+        referenced.add(headers.get("Docker-Content-Digest", tag))
     for tag in history:
         if tag in keep_tags:
             continue
         _, headers, _ = _request(f"{base}/v2/{repo}/manifests/{tag}", headers={"Authorization": auth, "Accept": MANIFEST_ACCEPT}, timeout=config.http_timeout)
         digest = headers.get("Docker-Content-Digest", tag)
-        if digest in kept_digests:
+        if digest in referenced:
             continue
         _request(f"{base}/v2/{repo}/manifests/{digest}", method="DELETE", headers={"Authorization": auth}, timeout=config.http_timeout)
 
@@ -242,10 +250,13 @@ def _push_blob_stream(base: str, repo: str, digest: str, file: Path, auth: str, 
     conn_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    conn = conn_cls(host, port, timeout=timeout)
-    conn.request("POST", f"{parsed.path}/v2/{repo}/blobs/uploads/", headers={"Authorization": auth})
-    resp = conn.getresponse()
-    resp.read()
+    try:
+        conn = conn_cls(host, port, timeout=timeout)
+        conn.request("POST", f"{parsed.path}/v2/{repo}/blobs/uploads/", headers={"Authorization": auth})
+        resp = conn.getresponse()
+        resp.read()
+    except (OSError, http.client.HTTPException) as err:
+        raise RuntimeError(f"registry connection failed: {err}") from err
     if resp.status != 202:
         raise RuntimeError(f"blob upload init -> HTTP {resp.status}")
     location = resp.getheader("Location", "")

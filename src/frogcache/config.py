@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from frogcache.data_models.config import Config
+from frogcache import net
 
 SECRET_KEYS = ("NTFY_URL", "NTFY_TOKEN", "GITHUB_TOKEN", "REGISTRY_USER", "REGISTRY_PASS", "DATABASE_URL")
 
@@ -66,4 +67,6 @@ def load_config() -> Config:
         quarantine_dir=os.environ.get("QUARANTINE_DIR", "/sandbox/quarantine"),
     )
     config.validate()
+    if config.registry_addr:
+        net.register_extra_host(__import__("urllib.parse", fromlist=["urlparse"]).urlparse(config.registry_addr).hostname)
     return config

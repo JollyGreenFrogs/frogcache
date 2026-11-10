@@ -12,6 +12,7 @@ Governing ADR: docs/decisions/ADR-003 (§A).
 
 import fcntl
 import json
+import urllib.parse
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -93,7 +94,7 @@ class _Handler(BaseHTTPRequestHandler):
             return None
 
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
-        path = self.path.lstrip("/")
+        path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path).lstrip("/")
         target = self._safe_target(path)
         if target is None:
             self.send_error(404)

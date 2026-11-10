@@ -46,6 +46,7 @@ USER_AGENT = "frogcache/1.0"
 # Only these hosts are ever fetched (plus the configured private registry).
 ALLOWED_HOSTS = {
     "pypi.org",
+    "files.pythonhosted.org",
     "raw.githubusercontent.com",
     "api.github.com",
     "github.com",
@@ -55,8 +56,19 @@ ALLOWED_HOSTS = {
 }
 
 
+_EXTRA_HOSTS: set[str] = set()
+
+
+def register_extra_host(host: str | None) -> None:
+    """Allow an extra host (the private registry), typically from Config."""
+    if host:
+        _EXTRA_HOSTS.add(host)
+
+
 def _configured_registry_host() -> str | None:
-    """Host of the private registry from REGISTRY_ADDR (secrets file), if set."""
+    """Private registry host: registered via Config first, then REGISTRY_ADDR env."""
+    if _EXTRA_HOSTS:
+        return next(iter(_EXTRA_HOSTS))
     addr = os.environ.get("REGISTRY_ADDR", "")
     return urllib.parse.urlparse(addr).hostname if addr else None
 

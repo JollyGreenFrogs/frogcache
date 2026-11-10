@@ -26,7 +26,7 @@ services:
       - ${DATA_SHARE:-/mnt/frogcache}/files:/usr/share/nginx/html:ro
     command: >
       sh -c "printf 'server { listen 8091; root /usr/share/nginx/html; autoindex on;
-              error_page 404 = @fetch; location @fetch { proxy_pass http://127.0.0.1:8092; } }' > /etc/nginx/conf.d/default.conf
+              error_page 404 = @fetch; location @fetch { proxy_pass http://127.0.0.1:8092; proxy_read_timeout 900s; proxy_send_timeout 900s; } }' > /etc/nginx/conf.d/default.conf
               && nginx -g 'daemon off;'"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8091/"]
@@ -67,7 +67,7 @@ services:
     container_name: frogcache-fetcher
     restart: unless-stopped
     network_mode: host                  # nginx proxies 404s to 127.0.0.1:8092
-    command: ["sh", "-c", "freshclam --quiet || true; exec python -m frogcache --fetch-server"]
+    command: ["sh", "-c", "(while true; do freshclam --quiet || true; sleep 86400; done) & exec python -m frogcache --fetch-server"]
     volumes:
       - ${DATA_SHARE:-/mnt/frogcache}/files:/cache
       - ${DATA_SHARE:-/mnt/frogcache}/artifacts:/artifacts

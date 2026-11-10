@@ -39,7 +39,7 @@ def run_once(config) -> tuple[list[str], list[str]]:
         audit.log_event(conn, "check_start", spec.name)
         try:
             reports.append(pipeline.check_artifact(config, spec, conn, all_specs=specs))
-        except (RuntimeError, ValueError) as err:
+        except (RuntimeError, ValueError, OSError) as err:
             audit.log_event(conn, "error", spec.name, error=str(err)[:200])
             failures.append(f"{spec.name}: {err}")
             print(f"ERROR {spec.name}: {err}", file=sys.stderr)

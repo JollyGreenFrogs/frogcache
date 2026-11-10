@@ -70,7 +70,7 @@ def check_hf_artifact(config: Config, spec, conn, all_specs=()) -> str:
     entries = manifest.entries(conn, spec.name)
     # Skip only if the newest cached revision is complete (files on disk AND in
     # the manifest) — a failed download or a changed files pattern must retry.
-    if cached and cached[0] == release.version and hf.revision_complete(
+    if release.version in cached and hf.revision_complete(
         config.cache_dir, spec.source.repo, release.version,
         [path for path, _, _ in release.files], entries,
     ):
@@ -97,7 +97,8 @@ def check_hf_artifact(config: Config, spec, conn, all_specs=()) -> str:
     for other in all_specs or [spec]:
         if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
             manifest.prune_versions(conn, other.name, kept)
-    removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept)
+    with cache.retention_lock(config.cache_dir):
+        removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept | {release.version})
     _log(conn, "retention", spec.name, release.version, removed=removed)
     before = cached[0][:12] if cached else "none"
     note = f" (pruned {', '.join(v[:12] for v in removed)})" if removed else ""
@@ -219,10 +220,10 @@ def _record_pullthrough(conn, config: Config, spec, version: str, filename: str,
                       digest_verified=verified),
         config.retain,
     )
-    _apply_disk_retention(config, conn, spec)
+    _apply_disk_retention(config, conn, spec, keep_extra={version})
 
 
-def _apply_disk_retention(config: Config, conn, spec) -> None:
+def _apply_disk_retention(config: Config, conn, spec, keep_extra: set[str] | None = None) -> None:
     """Prune cached files to the newest RETAIN versions recorded in the DB.
 
     Wheels: top-level *.whl per artifact. HF: revision dirs per repo, with the
@@ -230,17 +231,20 @@ def _apply_disk_retention(config: Config, conn, spec) -> None:
     file currently being served (it is in the keep-set by construction).
     """
     if spec.source.type == "pypi":
-        cache.apply_retention(config.cache_dir, spec.name, config.retain)
+        cache.apply_retention(config.cache_dir, spec.name, config.retain, keep_extra=keep_extra)
         return
     if spec.source.type == "huggingface":
         try:
             all_specs = upstream.load_artifacts(config.artifacts_file)
         except ValueError:
-            all_specs = [spec]
+            all_specs = []
+        if spec not in all_specs:
+            all_specs.append(spec)  # pull-through spec may not be persisted yet
         seen: dict[str, str] = {}
         for other in all_specs:
             if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
                 for e in manifest.entries(conn, other.name):
                     seen[e["version"]] = max(seen.get(e["version"], ""), e["fetched_at"])
-        kept = set(sorted(seen, key=lambda v: seen[v], reverse=True)[: config.retain])
-        hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept)
+        kept = set(sorted(seen, key=lambda v: seen[v], reverse=True)[: config.retain]) | (keep_extra or set())
+        with cache.retention_lock(config.cache_dir):
+            hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept)
