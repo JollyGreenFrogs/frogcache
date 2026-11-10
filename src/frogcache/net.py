@@ -12,16 +12,28 @@ import urllib.request
 from pathlib import Path
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validate every redirect target through safe_url — an allowlisted host
+    must not be able to redirect us to a non-allowlisted one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        safe_url(newurl)  # raises RuntimeError on non-allowlisted scheme/host
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+SAFE_OPENER = urllib.request.build_opener(_SafeRedirectHandler)
+
+
 def request(url: str, method: str = "GET", headers: dict | None = None,
             data: bytes | None = None, timeout: int = 60):
     """One HTTP request; returns (status, headers, body). Never raises on HTTP errors.
 
     Raises:
-        RuntimeError: on network failure.
+        RuntimeError: on network failure or a redirect to a non-allowlisted host.
     """
     req = urllib.request.Request(safe_url(url), data=data, method=method, headers=headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with SAFE_OPENER.open(req, timeout=timeout) as response:
             return response.status, dict(response.headers), response.read()
     except urllib.error.HTTPError as err:
         return err.code, dict(err.headers or {}), err.read()
@@ -33,7 +45,7 @@ def stream_to(url: str, dest: Path, headers: dict, timeout: int) -> None:
     """Stream a URL body to dest. Raises RuntimeError on failure (dest removed)."""
     req = urllib.request.Request(safe_url(url), headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response, open(dest, "wb") as out:
+        with SAFE_OPENER.open(req, timeout=timeout) as response, open(dest, "wb") as out:
             while chunk := response.read(1 << 20):
                 out.write(chunk)
     except (urllib.error.URLError, OSError) as err:
@@ -134,7 +146,7 @@ def fetch_json(url: str, token: str = "", timeout: int = 60) -> object:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        with urllib.request.urlopen(urllib.request.Request(safe_url(url), headers=headers), timeout=timeout) as response:
+        with SAFE_OPENER.open(urllib.request.Request(safe_url(url), headers=headers), timeout=timeout) as response:
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as err:
         raise RuntimeError(f"GET {url} -> HTTP {err.code}") from err

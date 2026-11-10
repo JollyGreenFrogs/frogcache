@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from frogcache.net import safe_url
+from frogcache.net import SAFE_OPENER, safe_url
 from frogcache.versions import is_newer, parse_version
 
 def safe_join(root: str, rel: str) -> Path:
@@ -109,7 +109,7 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(safe_url(url), headers={"User-Agent": "frogcache/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
+        with SAFE_OPENER.open(request, timeout=timeout) as response, open(tmp, "wb") as out:
             digest = hashlib.sha256()
             while chunk := response.read(1 << 20):
                 digest.update(chunk)
