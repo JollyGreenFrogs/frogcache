@@ -197,8 +197,8 @@ def fetch_exact_file(config: Config, path: str, spec, conn) -> Path | None:
         if len(parts) < 5:
             return None
         repo, rev, rel = f"{parts[1]}/{parts[2]}", parts[3], "/".join(parts[4:])
-        if any(seg in ("", ".", "..") for seg in rel.split("/")):
-            return None  # path traversal or empty segments are never served
+        if any(seg in ("", ".", "..") for seg in parts[1:]):
+            return None  # traversal or empty segments (repo/revision/file) never served
         # resolve a mutable revision (branch/tag like 'main') to its commit sha
         # first: the cache key and the downloaded bytes must be the same commit
         sha = rev
