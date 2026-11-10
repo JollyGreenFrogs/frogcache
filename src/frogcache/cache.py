@@ -97,10 +97,13 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     Raises:
         RuntimeError: on download failure (temp file is removed).
     """
+    # strict filename guard: flat name only, no separators/traversal — this is
+    # the sanitizer the path-injection query recognizes; safe_join re-checks
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", filename):
+        raise RuntimeError(f"unsafe download filename: {filename!r}")
     dest = safe_join(cache_dir, filename)  # containment: filename may not escape
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # tmp must itself be a safe_join result so every path op on it is sanitized
-    tmp = safe_join(str(dest.parent), f".{dest.name}.part")
+    tmp = safe_join(cache_dir, f".{dest.name}.part")
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(safe_url(url), headers={"User-Agent": "frogcache/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
