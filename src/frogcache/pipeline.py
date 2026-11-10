@@ -210,7 +210,7 @@ def fetch_exact_file(config: Config, path: str, spec, conn) -> Path | None:
 
 def _record_pullthrough(conn, config: Config, spec, version: str, filename: str,
                         sha256: str, verified: bool) -> None:
-    """Record a successful pull-through fetch in the fetches table (ADR-003 §A)."""
+    """Record a successful pull-through fetch, then prune DISK to match the DB (ADR-003 §A)."""
     manifest.record_fetch(
         conn, spec.name,
         ManifestEntry(version=version, filename=filename, sha256=sha256,
@@ -219,3 +219,28 @@ def _record_pullthrough(conn, config: Config, spec, version: str, filename: str,
                       digest_verified=verified),
         config.retain,
     )
+    _apply_disk_retention(config, conn, spec)
+
+
+def _apply_disk_retention(config: Config, conn, spec) -> None:
+    """Prune cached files to the newest RETAIN versions recorded in the DB.
+
+    Wheels: top-level *.whl per artifact. HF: revision dirs per repo, with the
+    keep-set shared across all artifacts tracking that repo. Never deletes the
+    file currently being served (it is in the keep-set by construction).
+    """
+    if spec.source.type == "pypi":
+        cache.apply_retention(config.cache_dir, spec.name, config.retain)
+        return
+    if spec.source.type == "huggingface":
+        try:
+            all_specs = upstream.load_artifacts(config.artifacts_file)
+        except ValueError:
+            all_specs = [spec]
+        seen: dict[str, str] = {}
+        for other in all_specs:
+            if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
+                for e in manifest.entries(conn, other.name):
+                    seen[e["version"]] = max(seen.get(e["version"], ""), e["fetched_at"])
+        kept = set(sorted(seen, key=lambda v: seen[v], reverse=True)[: config.retain])
+        hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept)

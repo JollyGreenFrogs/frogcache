@@ -99,31 +99,28 @@ verify() {
 }
 
 # seed_artifacts_file — merge seed/artifacts.json into the share's artifacts.json
-# (by name); auto-added entries (auto:true) are preserved, never overwritten.
-# Merge runs on the CLIENT (python3 here), then docker cp into the share.
+# (by name); auto-added entries (auto:true) are preserved. Runs SERVER-SIDE in a
+# throwaway updater-image container holding flock on the share's .lock, so a
+# running fetcher's auto-add can never be lost mid-redeploy (ADR-003 §A).
 seed_artifacts_file() {
-    local tmp merged
-    tmp="frogcache-seed-$$"
-    merged="$(mktemp)"
-    # read the live file from the share if present (started throwaway container)
-    if "${D[@]}" run --rm -v "$DATA_SHARE/artifacts:/artifacts" alpine cat /artifacts/artifacts.json > "$merged" 2>/dev/null; then
-        python3 - "$merged" "$ROOT/seed/artifacts.json" <<'PYEOF'
-import json, sys
-live = json.load(open(sys.argv[1]))
-seed = json.load(open(sys.argv[2]))
+    "${D[@]}" run --rm \
+        -v "$DATA_SHARE/artifacts:/artifacts" -v "$ROOT/seed:/seed:ro" \
+        -e PYTHONPATH=/app/src "$UPDATER_IMAGE" \
+        sh -c 'flock -x /artifacts/.lock python3 - /seed/artifacts.json <<'"'"'PYEOF'"'"'
+import fcntl, json, sys
+# lock already held by flock(1) on .lock
+path = "/artifacts/artifacts.json"
+if __import__("os").path.exists(path):
+    live = json.load(open(path))
+else:
+    live = {"artifacts": []}
+seed = json.load(open(sys.argv[1]))
 names = {a.get("name") for a in live.get("artifacts", [])}
 for a in seed.get("artifacts", []):
     if a.get("name") not in names:
         live.setdefault("artifacts", []).append(a)
-json.dump(live, open(sys.argv[1], "w"), indent=2)
-PYEOF
-    else
-        cp "$ROOT/seed/artifacts.json" "$merged"
-    fi
-    "${D[@]}" create --name "$tmp" -v "$DATA_SHARE/artifacts:/artifacts" alpine true >/dev/null
-    "${D[@]}" cp "$merged" "$tmp:/artifacts/artifacts.json"
-    "${D[@]}" rm "$tmp" >/dev/null
-    rm -f "$merged"
+json.dump(live, open(path, "w"), indent=2)
+PYEOF'
 }
 
 main() {

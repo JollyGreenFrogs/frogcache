@@ -10,6 +10,7 @@ Binds loopback only; LAN exposure is the interim model (jgf-auth tokens later).
 Governing ADR: docs/decisions/ADR-003 (§A).
 """
 
+import fcntl
 import json
 import threading
 import uuid
@@ -23,7 +24,9 @@ from frogcache.notify import notify_safe
 
 FETCH_PORT = 8092
 
-_SPEC_LOCK = threading.Lock()  # serializes the artifacts.json read/modify/write
+_SPEC_LOCK = threading.Lock()  # process-local; cross-container safety comes from the
+# flock on <artifacts share>/.lock taken around the whole read/modify/write below
+# (deploy.sh takes the same lock during redeploys).
 
 
 def infer_spec_from_path(path: str) -> ArtifactSpec | None:
@@ -62,14 +65,17 @@ def append_auto_spec(config: Config, spec: ArtifactSpec, conn) -> bool:
         True if appended, False if already present.
     """
     path = Path(config.artifacts_file)
-    raw = json.loads(path.read_text())
-    artifacts = raw.setdefault("artifacts", [])
-    if any(a.get("name") == spec.name for a in artifacts):
-        return False
-    artifacts.append({"name": spec.name, "auto": True, "source": spec.source.__dict__})
-    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(json.dumps(raw, indent=2))
-    tmp.replace(path)
+    lock_path = path.parent / ".lock"
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)  # shared with deploy.sh redeploys
+        raw = json.loads(path.read_text())
+        artifacts = raw.setdefault("artifacts", [])
+        if any(a.get("name") == spec.name for a in artifacts):
+            return False
+        artifacts.append({"name": spec.name, "auto": True, "source": spec.source.__dict__})
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(raw, indent=2))
+        tmp.replace(path)
     audit.log_event(conn, "auto_add", spec.name, source=spec.source.type)
     return True
 
