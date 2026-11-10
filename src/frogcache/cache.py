@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import urllib.request
+import uuid
 from pathlib import Path
 
 from frogcache.net import safe_url
@@ -102,7 +103,9 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", filename):
         raise RuntimeError(f"unsafe download filename: {filename!r}")
     dest = safe_join(cache_dir, filename)  # containment: filename may not escape
-    tmp = safe_join(cache_dir, f".{dest.name}.part")
+    # tmp name comes from a uuid (not from the tainted filename) so no path op
+    # in the cleanup branch depends on user data
+    tmp = safe_join(cache_dir, f".{uuid.uuid4().hex}.part")
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(safe_url(url), headers={"User-Agent": "frogcache/1.0"})
     try:

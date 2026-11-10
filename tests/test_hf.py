@@ -121,12 +121,20 @@ def test_apply_hf_retention_keeps_only_keep_versions_and_drops_incomplete(tmp_pa
     assert sorted(remaining) == ["sha_mid", "sha_new"]
 
 
-def test_download_atomic_supports_subdir_filename(tmp_path):
+def test_download_atomic_rejects_unsafe_filename(tmp_path):
     src = tmp_path / "model.gguf"
     src.write_bytes(b"weights")
-    dest_dir = tmp_path / "cache" / "hf" / "org" / "model" / "sha123"
-    path, sha256 = cache.download_atomic(src.as_uri(), str(dest_dir), "sub/dir/model.gguf", 30)
-    assert path == dest_dir / "sub" / "dir" / "model.gguf"
+    dest_dir = tmp_path / "cache"
+    for bad in ("sub/dir/model.gguf", "../escape.gguf", "/abs/model.gguf", ".."):
+        try:
+            cache.download_atomic(src.as_uri(), str(dest_dir), bad, 30)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"unsafe filename accepted: {bad!r}")
+    # a plain basename still works
+    path, sha256 = cache.download_atomic(src.as_uri(), str(dest_dir), "model.gguf", 30)
+    assert path == dest_dir / "model.gguf"
     assert path.read_bytes() == b"weights"
     assert len(sha256) == 64
 
