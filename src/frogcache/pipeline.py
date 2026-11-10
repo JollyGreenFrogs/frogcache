@@ -100,6 +100,11 @@ def check_hf_artifact(config: Config, spec, conn, all_specs=()) -> str:
             manifest.prune_versions(conn, other.name, kept)
     with cache.retention_lock(config.cache_dir):
         removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept | {release.version})
+    # never report success with missing files: every promoted file must exist post-retention
+    missing = [p for p, _, _ in release.files
+               if not (hf.hf_dir(config.cache_dir, spec.source.repo, release.version) / p).is_file()]
+    if missing:
+        raise RuntimeError(f"post-retention check: missing files {missing}")
     _log(conn, "retention", spec.name, release.version, removed=removed)
     before = cached[0][:12] if cached else "none"
     note = f" (pruned {', '.join(v[:12] for v in removed)})" if removed else ""

@@ -93,10 +93,12 @@ def safe_url(url: str, extra_hosts: set[str] | None = None) -> str:
         allowed.add(reg_host)
     if parsed.hostname not in allowed or parsed.scheme not in ("https", "http"):
         raise RuntimeError(f"refusing non-allowlisted URL host: {parsed.hostname!r}")
-    if parsed.scheme == "http" and parsed.hostname not in (extra_hosts or set()):
+    is_registry = parsed.hostname in (extra_hosts or set()) or parsed.hostname == _configured_registry_host()
+    if parsed.scheme == "http" and not is_registry:
         raise RuntimeError(f"http only allowed for the private registry, not {parsed.hostname!r}")
+    scheme = parsed.scheme if is_registry else "https"  # registry may be plain http on the LAN
     path = urllib.parse.quote(parsed.path, safe="/%")
-    return urllib.parse.urlunparse(("https", parsed.netloc, path, "", parsed.query, ""))
+    return urllib.parse.urlunparse((scheme, parsed.netloc, path, "", parsed.query, ""))
 
 
 
