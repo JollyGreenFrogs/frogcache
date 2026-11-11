@@ -107,3 +107,42 @@ def test_scan_malware_timeout_is_runtime_error(tmp_path, monkeypatch):
     monkeypatch.setattr(verify.subprocess, "run", boom)
     with pytest.raises(RuntimeError):
         verify.scan_malware(tmp_path / "x.bin")
+
+
+def _fake_clamscan(monkeypatch, returncode, out):
+    import subprocess
+
+    class R:
+        pass
+
+    def fake_run(cmd, **kwargs):
+        assert "--alert-exceeds-max" in cmd  # limit-skips must be detections
+        r = R()
+        r.returncode = returncode
+        r.stdout = out.encode()
+        r.stderr = b""
+        return r
+
+    monkeypatch.setattr(verify.subprocess, "run", fake_run)
+
+
+def test_scan_malware_clean_scan_passes(tmp_path, monkeypatch):
+    _fake_clamscan(monkeypatch, 0, "pkg.whl: OK\n----------- SCAN SUMMARY -----------\nScanned files: 1\nInfected files: 0\n")
+    verify.scan_malware(tmp_path / "x.bin")
+
+
+def test_scan_malware_rejects_partial_scan(tmp_path, monkeypatch):
+    # exit 0 but content skipped due to limits — must NOT pass
+    _fake_clamscan(monkeypatch, 0, "Scanned files: 1\nInfected files: 0\nLibClamAV Warning: Exceeded max scan size\n")
+    with pytest.raises(RuntimeError):
+        verify.scan_malware(tmp_path / "x.bin")
+    # exit 0, summary clean, but file never scanned
+    _fake_clamscan(monkeypatch, 0, "Infected files: 0\n")
+    with pytest.raises(RuntimeError):
+        verify.scan_malware(tmp_path / "x.bin")
+
+
+def test_scan_malware_rejects_detection(tmp_path, monkeypatch):
+    _fake_clamscan(monkeypatch, 1, "x.bin: Eicar-Test-Signature FOUND\nScanned files: 1\nInfected files: 1\n")
+    with pytest.raises(RuntimeError):
+        verify.scan_malware(tmp_path / "x.bin")

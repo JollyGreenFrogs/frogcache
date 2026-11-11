@@ -80,7 +80,17 @@ def scan_malware(path: Path, timeout: int = 600) -> None:
         raise RuntimeError(f"refusing to scan non-regular file {path.name}")
     try:
         result = subprocess.run(
-            ["clamscan", "--stdout", str(path)],
+            [
+                "clamscan", "--stdout",
+                # a limit-skip (oversized/oversized-decompressed/deep archive)
+                # must become a DETECTION (exit 1), never a silent success
+                "--alert-exceeds-max",
+                # generous explicit limits so multi-GB wheels / GGUF / image
+                # layers are not skipped by the small defaults
+                "--max-filesize=200G", "--max-scansize=200G",
+                "--max-files=100000", "--max-recursion=64",
+                str(path),
+            ],
             capture_output=True,
             timeout=timeout,
         )
@@ -90,13 +100,14 @@ def scan_malware(path: Path, timeout: int = 600) -> None:
         ) from err
     except subprocess.TimeoutExpired as err:
         raise RuntimeError(f"clamscan timed out on {path.name}") from err
-    out = result.stdout.decode(errors="replace")
-    # clamscan exits 0 even when it SKIPS files (size/complexity limits), so a
-    # bare returncode check can pass a partial scan as clean — require the
-    # summary line "Infected files: 0", no detection marker, AND proof the file
-    # was actually scanned ("Scanned files: N" with N >= 1)
+    out = (result.stdout + result.stderr).decode(errors="replace")
+    # clamscan exits 0 even when it SKIPS content (size/complexity limits), so
+    # require: "Infected files: 0", no detection/skip markers, AND proof the
+    # file was actually scanned ("Scanned files: N" with N >= 1)
     scanned = re.search(r"Scanned files: (\d+)", out)
-    if (result.returncode != 0 or "Infected files: 0" not in out or "FOUND" in out
+    skip_markers = ("FOUND", "ERROR", "Exceeded", "skipped", "too deeply nested")
+    if (result.returncode != 0 or "Infected files: 0" not in out
+            or any(m in out for m in skip_markers)
             or scanned is None or int(scanned.group(1)) < 1):
         raise RuntimeError(f"clamscan detected malware or could not fully scan {path.name}")
 
