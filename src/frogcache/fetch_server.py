@@ -106,8 +106,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             conn = db.connect(self.config.database_url)
             try:
-                # fetch the EXACT requested file, not the latest release
-                promoted = pipeline.fetch_exact_file(self.config, path, spec, conn)
+                # fetch the EXACT requested file, not the latest release; the
+                # retention lock is held across promote+record+prune so the
+                # updater can never prune the in-flight file mid-fetch
+                with cache.retention_lock(self.config.cache_dir):
+                    promoted = pipeline.fetch_exact_file(self.config, path, spec, conn)
             except (RuntimeError, ValueError) as err:
                 audit.log_event(conn, "verify_fail", spec.name, error=str(err)[:200])
                 notify_safe(self.config, "frogcache: pull-through FAILED",

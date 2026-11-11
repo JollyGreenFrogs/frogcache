@@ -7,6 +7,7 @@ every check; failures are quarantined, never served or recorded.
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -92,8 +93,11 @@ def scan_malware(path: Path, timeout: int = 600) -> None:
     out = result.stdout.decode(errors="replace")
     # clamscan exits 0 even when it SKIPS files (size/complexity limits), so a
     # bare returncode check can pass a partial scan as clean — require the
-    # summary line "Infected files: 0" and no detection marker.
-    if result.returncode != 0 or "Infected files: 0" not in out or "FOUND" in out:
+    # summary line "Infected files: 0", no detection marker, AND proof the file
+    # was actually scanned ("Scanned files: N" with N >= 1)
+    scanned = re.search(r"Scanned files: (\d+)", out)
+    if (result.returncode != 0 or "Infected files: 0" not in out or "FOUND" in out
+            or scanned is None or int(scanned.group(1)) < 1):
         raise RuntimeError(f"clamscan detected malware or could not fully scan {path.name}")
 
 

@@ -78,28 +78,31 @@ def check_hf_artifact(config: Config, spec, conn, all_specs=()) -> str:
         [path for path, _, _ in release.files], entries,
     ):
         return f"{spec.name}: up to date ({release.version[:12]})"
-    downloaded = []
-    for path, url, expected_sha256 in release.files:
-        dest = hf.hf_dir(config.cache_dir, spec.source.repo, release.version) / path
-        _log(conn, "download_start", spec.name, release.version, file=path)
-        sha256, verified = _stage_and_promote(
-            config, url, dest, expected_sha256, _digest_required(spec.source.type, path)
-        )
-        _log(conn, "verify_pass", spec.name, release.version, file=path, digest_verified=verified)
-        downloaded.append((f"hf/{spec.source.repo}/{release.version}/{path}", sha256, verified))
-    manifest.record_fetch_multi(conn, spec.name, release.version, downloaded,
-                                spec.source.type, datetime.now(timezone.utc).isoformat())
-    # keep-set spans ALL artifacts tracking this repo — per-artifact pruning
-    # would delete another spec's revisions (e.g. main vs pinned tag)
-    seen: dict[str, str] = {}  # version -> newest fetched_at across the repo
-    for other in all_specs or [spec]:
-        if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
-            for e in manifest.entries(conn, other.name):
-                seen[e["version"]] = max(seen.get(e["version"], ""), e["fetched_at"])
-    kept = set(sorted(seen, key=lambda v: seen[v], reverse=True)[: config.retain])
+    # promote + DB record + prune under ONE lock: a concurrent pull-through
+    # prune can never delete the in-flight revision's files before they are
+    # recorded (which would later report success with missing files)
     with cache.retention_lock(config.cache_dir):
-        # DB prune + disk prune under one lock: no concurrent fetch can observe
-        # a keep-set that deletes a retained revision mid-update
+        downloaded = []
+        for path, url, expected_sha256 in release.files:
+            dest = cache.safe_join(
+                str(hf.hf_dir(config.cache_dir, spec.source.repo, release.version)), path
+            )
+            _log(conn, "download_start", spec.name, release.version, file=path)
+            sha256, verified = _stage_and_promote(
+                config, url, dest, expected_sha256, _digest_required(spec.source.type, path)
+            )
+            _log(conn, "verify_pass", spec.name, release.version, file=path, digest_verified=verified)
+            downloaded.append((f"hf/{spec.source.repo}/{release.version}/{path}", sha256, verified))
+        manifest.record_fetch_multi(conn, spec.name, release.version, downloaded,
+                                    spec.source.type, datetime.now(timezone.utc).isoformat())
+        # keep-set spans ALL artifacts tracking this repo — per-artifact pruning
+        # would delete another spec's revisions (e.g. main vs pinned tag)
+        seen: dict[str, str] = {}  # version -> newest fetched_at across the repo
+        for other in all_specs or [spec]:
+            if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
+                for e in manifest.entries(conn, other.name):
+                    seen[e["version"]] = max(seen.get(e["version"], ""), e["fetched_at"])
+        kept = set(sorted(seen, key=lambda v: seen[v], reverse=True)[: config.retain])
         for other in all_specs or [spec]:
             if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
                 manifest.prune_versions(conn, other.name, kept)
@@ -137,13 +140,14 @@ def check_artifact(config: Config, spec, conn, all_specs=()) -> str:
     if not cache.is_update_available(release.version, config.cache_dir, spec.name):
         return f"{spec.name}: up to date ({release.version})"
     cached_before = cache.newest_cached_version(config.cache_dir, spec.name) or "none"
-    dest = Path(config.cache_dir) / release.filename
+    dest = cache.safe_join(config.cache_dir, release.filename)
     _log(conn, "download_start", spec.name, release.version, file=release.filename)
-    sha256, verified = _stage_and_promote(config, release.url, dest, release.sha256, _digest_required(spec.source.type, release.filename))
-    _log(conn, "verify_pass", spec.name, release.version, file=release.filename, digest_verified=verified)
-    # DB prune and disk prune under ONE lock so a concurrent pull-through can
-    # never observe a keep-set that deletes a just-recorded (retained) version
+    # promote + DB record + disk prune under ONE lock: a concurrent pull-through
+    # prune can never delete the in-flight/just-promoted file before it is
+    # recorded, and never observe a keep-set that deletes a retained version
     with cache.retention_lock(config.cache_dir):
+        sha256, verified = _stage_and_promote(config, release.url, dest, release.sha256, _digest_required(spec.source.type, release.filename))
+        _log(conn, "verify_pass", spec.name, release.version, file=release.filename, digest_verified=verified)
         manifest.record_fetch(
             conn, spec.name,
             ManifestEntry(version=release.version, filename=dest.name, sha256=sha256,
@@ -251,19 +255,19 @@ def _record_pullthrough(conn, config: Config, spec, version: str, filename: str,
                         sha256: str, verified: bool) -> None:
     """Record a successful pull-through fetch, then prune DISK to match the DB (ADR-003 §A).
 
-    DB prune and disk prune happen under one retention lock so the updater can
-    never race us and delete the just-fetched version.
+    Caller must hold cache.retention_lock across the promote + this call, so the
+    updater can never race us and delete the just-fetched version before it is
+    recorded.
     """
-    with cache.retention_lock(config.cache_dir):
-        manifest.record_fetch(
-            conn, spec.name,
-            ManifestEntry(version=version, filename=filename, sha256=sha256,
-                          source=spec.source.type, url="",
-                          fetched_at=datetime.now(timezone.utc).isoformat(),
-                          digest_verified=verified),
-            config.retain,
-        )
-        _apply_disk_retention(config, conn, spec, keep_extra={version})
+    manifest.record_fetch(
+        conn, spec.name,
+        ManifestEntry(version=version, filename=filename, sha256=sha256,
+                      source=spec.source.type, url="",
+                      fetched_at=datetime.now(timezone.utc).isoformat(),
+                      digest_verified=verified),
+        config.retain,
+    )
+    _apply_disk_retention(config, conn, spec, keep_extra={version})
 
 
 def _apply_disk_retention(config: Config, conn, spec, keep_extra: set[str] | None = None) -> None:

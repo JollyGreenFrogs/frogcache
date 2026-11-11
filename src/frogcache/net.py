@@ -62,7 +62,15 @@ ALLOWED_HOSTS = {
     "raw.githubusercontent.com",
     "api.github.com",
     "github.com",
+    # GitHub release-asset CDN redirect targets
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "codeload.github.com",
     "huggingface.co",
+    # HF LFS/resolve redirect targets for model weight downloads
+    "cas-bridge.xethub.hf.co",
+    "cdn-lfs.hf.co",
+    "transfer.xethub.hf.co",
     "auth.docker.io",
     "index.docker.io",
 }
