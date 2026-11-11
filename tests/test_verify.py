@@ -101,12 +101,15 @@ def test_check_format_strips_part_suffix(tmp_path):
 def test_scan_malware_timeout_is_runtime_error(tmp_path, monkeypatch):
     import subprocess
 
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"payload")  # regular-file guard must pass so the timeout path is what raises
+
     def boom(*args, **kwargs):
         raise subprocess.TimeoutExpired("clamscan", 600)
 
     monkeypatch.setattr(verify.subprocess, "run", boom)
-    with pytest.raises(RuntimeError):
-        verify.scan_malware(tmp_path / "x.bin")
+    with pytest.raises(RuntimeError, match="timed out"):
+        verify.scan_malware(f)
 
 
 def _fake_clamscan(monkeypatch, returncode, out):
@@ -135,20 +138,20 @@ def test_scan_malware_clean_scan_passes(tmp_path, monkeypatch):
 
 def test_scan_malware_rejects_partial_scan(tmp_path, monkeypatch):
     f = tmp_path / "x.bin"
-    f.write_bytes(b"data")
+    f.write_bytes(b"payload")
     # exit 0 but content skipped due to limits — must NOT pass
     _fake_clamscan(monkeypatch, 0, "Scanned files: 1\nInfected files: 0\nLibClamAV Warning: Exceeded max scan size\n")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="could not fully scan"):
         verify.scan_malware(f)
     # exit 0, summary clean, but file never scanned
     _fake_clamscan(monkeypatch, 0, "Infected files: 0\n")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="could not fully scan"):
         verify.scan_malware(f)
 
 
 def test_scan_malware_rejects_detection(tmp_path, monkeypatch):
     f = tmp_path / "x.bin"
-    f.write_bytes(b"data")
+    f.write_bytes(b"payload")
     _fake_clamscan(monkeypatch, 1, "x.bin: Eicar-Test-Signature FOUND\nScanned files: 1\nInfected files: 1\n")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="detected malware"):
         verify.scan_malware(f)
