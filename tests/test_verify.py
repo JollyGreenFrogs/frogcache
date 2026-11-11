@@ -84,7 +84,7 @@ def test_fetch_and_promote_via_file_url(tmp_path, monkeypatch):
         zf.writestr("pkg-1.0.dist-info/WHEEL", "Wheel-Version: 1.0")
     dest = tmp_path / "cache" / "pkg.whl"
     ok, digest, verified = verify.fetch_and_promote(
-        src.as_uri(), dest, tmp_path / "sandbox", 30,
+        src.as_uri(), dest, tmp_path / "sandbox", 30, allow_file=True,
         expected_sha256=_sha(src.read_bytes()), digest_required=True,
     )
     assert ok and verified and dest.is_file()

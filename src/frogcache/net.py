@@ -43,7 +43,7 @@ def request(url: str, method: str = "GET", headers: dict | None = None,
     except urllib.error.HTTPError as err:
         return err.code, dict(err.headers or {}), err.read()
     except urllib.error.URLError as err:
-        raise RuntimeError(f"{method} {url} failed: {err.reason}") from err
+        raise RuntimeError(f"{method} {redact_url(url)} failed: {err.reason}") from err
 
 
 def stream_to(url: str, dest: Path, headers: dict, timeout: int) -> None:
@@ -55,7 +55,7 @@ def stream_to(url: str, dest: Path, headers: dict, timeout: int) -> None:
                 out.write(chunk)
     except (urllib.error.URLError, OSError) as err:
         dest.unlink(missing_ok=True)
-        raise RuntimeError(f"GET {url} failed: {err}") from err
+        raise RuntimeError(f"GET {redact_url(url)} failed: {err}") from err
 
 
 USER_AGENT = "frogcache/1.0"
@@ -112,12 +112,14 @@ def _configured_registry_host() -> str | None:
     return urllib.parse.urlparse(addr).hostname if addr else None
 
 
-def safe_url(url: str, extra_hosts: set[str] | None = None) -> str:
+def safe_url(url: str, extra_hosts: set[str] | None = None, allow_file: bool = False) -> str:
     """Validate and rebuild a URL: https only, host allowlist, re-encoded path.
 
     Args:
         url: candidate URL.
         extra_hosts: additional allowed hosts (e.g. the private registry host).
+        allow_file: permit file:// URLs — LOCAL TEST FIXTURES ONLY; production
+            callers must leave this False so a file:// URL can never be fetched.
     Returns:
         Rebuilt URL with scheme+host from the allowlist and an encoded path.
     Raises:
@@ -125,6 +127,8 @@ def safe_url(url: str, extra_hosts: set[str] | None = None) -> str:
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme == "file":
+        if not allow_file:
+            raise RuntimeError("file:// URLs are not allowed")
         return url  # local test fixtures only
     # allowlist membership is checked against the COMPLETE registered set —
     # several extra hosts (private registry + multiple upstream registries) may
@@ -143,19 +147,30 @@ def safe_url(url: str, extra_hosts: set[str] | None = None) -> str:
 
 
 
-def checked_url(url: str) -> str:
+def checked_url(url: str, allow_file: bool = False) -> str:
     """safe_url plus an INLINE hostname allowlist check at the point of use.
 
     safe_url already enforces the allowlist; the inline re-check makes the
-    sanitizer visible to static analysis at the request sink.
+    sanitizer visible to static analysis at the request sink. file:// is only
+    permitted when allow_file=True (local test fixtures).
     """
-    safe = safe_url(url)
+    safe = safe_url(url, allow_file=allow_file)
     parsed = urllib.parse.urlparse(safe)
     if parsed.scheme == "file":
-        return safe  # local test fixtures only
+        return safe  # reachable only with allow_file=True (local test fixtures)
     if parsed.hostname not in (ALLOWED_HOSTS | _EXTRA_HOSTS):
         raise RuntimeError(f"refusing non-allowlisted URL host: {safe!r}")
     return safe
+
+
+def redact_url(url: str) -> str:
+    """Strip query/fragment from a URL for logs, events, notifications.
+
+    Signed CDN URLs carry credentials in the query string — they must never
+    land in the audit DB, ntfy messages, or error text.
+    """
+    parsed = urllib.parse.urlparse(url)
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
 def fetch_json(url: str, token: str = "", timeout: int = 60) -> object:
@@ -177,7 +192,7 @@ def fetch_json(url: str, token: str = "", timeout: int = 60) -> object:
         with SAFE_OPENER.open(urllib.request.Request(checked_url(url), headers=headers), timeout=timeout) as response:
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as err:
-        raise RuntimeError(f"GET {url} -> HTTP {err.code}") from err
+        raise RuntimeError(f"GET {redact_url(url)} -> HTTP {err.code}") from err
     except urllib.error.URLError as err:
         raise RuntimeError(f"GET {url} failed: {err.reason}") from err
 

@@ -211,6 +211,7 @@ def fetch_and_promote(
     quarantine: Path | None = None,
     digest_required: bool = False,
     root: str = "/",
+    allow_file: bool = False,
 ) -> tuple[bool, str, bool]:
     """Download url into the sandbox, verify, then promote to dest (ADR-003 §D).
 
@@ -229,7 +230,7 @@ def fetch_and_promote(
     """
     stage = sandbox_dir / uuid.uuid4().hex  # unique per fetch — no shared staging names
     stage.mkdir(parents=True, exist_ok=True)
-    part, _ = download_atomic(url, str(stage), f"{dest.name}.part", timeout)
+    part, _ = download_atomic(url, str(stage), f"{dest.name}.part", timeout, allow_file=allow_file)
     try:
         return verify_and_promote(part, dest, expected_sha256, quarantine, digest_required, root=root)
     finally:

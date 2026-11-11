@@ -9,6 +9,8 @@ Governing ADR: docs/decisions/ADR-004.
 import json
 from datetime import datetime, timezone
 
+from frogcache.net import redact_url
+
 
 
 def log_event(
@@ -35,7 +37,10 @@ def log_event(
             "event": event,
             "artifact": artifact,
             "version": version,
-            "detail": json.dumps(detail, sort_keys=True),
+            "detail": json.dumps(
+            {k: (redact_url(v) if isinstance(v, str) and "://" in v else v) for k, v in detail.items()},
+            sort_keys=True,
+        ),
         },
     )
     conn.commit()

@@ -11,6 +11,8 @@ Governing ADRs: ADR-001 (wheels), ADR-002 (HF), ADR-003, ADR-004.
 import json
 from pathlib import Path
 
+from frogcache.net import redact_url
+
 from frogcache.data_models.artifact import ManifestEntry
 
 _COLS = "artifact, version, filename, sha256, source, url, fetched_at, digest_verified"
@@ -80,7 +82,7 @@ def record_fetch(conn, name: str, entry: ManifestEntry, keep: int) -> None:
     conn.execute(
         f"INSERT INTO fetches ({_COLS}) VALUES (%(artifact)s, %(version)s, %(filename)s, %(sha256)s, %(source)s, %(url)s, %(fetched_at)s, %(digest_verified)s)",
         {"artifact": name, "version": entry.version, "filename": entry.filename,
-         "sha256": entry.sha256, "source": entry.source, "url": entry.url,
+         "sha256": entry.sha256, "source": entry.source, "url": redact_url(entry.url),
          "fetched_at": entry.fetched_at, "digest_verified": entry.digest_verified},
     )
     conn.commit()

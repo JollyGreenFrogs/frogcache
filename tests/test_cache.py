@@ -56,7 +56,7 @@ def test_download_atomic_and_manifest(tmp_path, tmp_path_factory, db_conn):
     payload = tmp_path_factory.mktemp("src") / "file.whl"
     payload.write_bytes(b"hello wheel")
     cache_dir = tmp_path / "cache"
-    path, sha256 = cache.download_atomic(payload.as_uri(), str(cache_dir), "a-1.0-py3-none-any.whl", 30)
+    path, sha256 = cache.download_atomic(payload.as_uri(), str(cache_dir), "a-1.0-py3-none-any.whl", 30, allow_file=True)
     assert path.name == "a-1.0-py3-none-any.whl"
     assert path.read_bytes() == b"hello wheel"
     assert len(sha256) == 64

@@ -85,7 +85,7 @@ def newest_cached_version(cache_dir: str, name: str) -> str | None:
     return files[0][0] if files else None
 
 
-def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tuple[Path, str]:
+def download_atomic(url: str, cache_dir: str, filename: str, timeout: int, allow_file: bool = False) -> tuple[Path, str]:
     """Download url into cache_dir/filename via a temp file + rename.
 
     Args:
@@ -107,7 +107,7 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     # in the cleanup branch depends on user data
     tmp = safe_join(cache_dir, f".{uuid.uuid4().hex}.part")
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(checked_url(url), headers={"User-Agent": "frogcache/1.0"})
+    request = urllib.request.Request(checked_url(url, allow_file=allow_file), headers={"User-Agent": "frogcache/1.0"})
     try:
         with SAFE_OPENER.open(request, timeout=timeout) as response, open(tmp, "wb") as out:
             digest = hashlib.sha256()

@@ -127,14 +127,14 @@ def test_download_atomic_rejects_unsafe_filename(tmp_path):
     dest_dir = tmp_path / "cache"
     for bad in ("sub/dir/model.gguf", "../escape.gguf", "/abs/model.gguf", ".."):
         try:
-            cache.download_atomic(src.as_uri(), str(dest_dir), bad, 30)
+            cache.download_atomic(src.as_uri(), str(dest_dir), bad, 30, allow_file=True)
         except RuntimeError:
             pass
         else:
             raise AssertionError(f"unsafe filename accepted: {bad!r}")
     # plain basenames still work, including dotfiles like .gitattributes
     for good in ("model.gguf", ".gitattributes"):
-        path, sha256 = cache.download_atomic(src.as_uri(), str(dest_dir), good, 30)
+        path, sha256 = cache.download_atomic(src.as_uri(), str(dest_dir), good, 30, allow_file=True)
         assert path == dest_dir / good
         assert path.read_bytes() == b"weights"
         assert len(sha256) == 64

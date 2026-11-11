@@ -37,3 +37,19 @@ def test_redirect_handler_rejects_non_allowlisted_target():
         handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example.com/x")
     with pytest.raises(RuntimeError):
         handler.redirect_request(req, None, 302, "Found", {}, "file:///etc/passwd")
+
+
+def test_file_scheme_rejected_by_default():
+    # production paths must never fetch file:// (local file read into the cache)
+    with pytest.raises(RuntimeError):
+        net.safe_url("file:///etc/passwd")
+    with pytest.raises(RuntimeError):
+        net.checked_url("file:///etc/passwd")
+    assert net.safe_url("file:///tmp/x", allow_file=True) == "file:///tmp/x"
+
+
+def test_redact_url_strips_query_and_fragment():
+    assert net.redact_url("https://objects.githubusercontent.com/a?X-Amz-Signature=secret&x=1#f") == \
+        "https://objects.githubusercontent.com/a"
+    assert net.redact_url("https://huggingface.co/a/b/resolve/main/f?cursor=abc") == \
+        "https://huggingface.co/a/b/resolve/main/f"
