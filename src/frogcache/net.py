@@ -17,7 +17,12 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     must not be able to redirect us to a non-allowlisted one."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        safe_url(newurl)  # raises RuntimeError on non-allowlisted scheme/host
+        parsed = urllib.parse.urlparse(newurl)
+        # redirects must stay http(s) — safe_url alone would let file:// through
+        # (it is allowed for local test fixtures in direct calls)
+        if parsed.scheme not in ("https", "http"):
+            raise RuntimeError(f"refusing redirect to non-http scheme: {parsed.scheme!r}")
+        safe_url(newurl)  # raises RuntimeError on non-allowlisted host
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
