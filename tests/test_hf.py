@@ -227,8 +227,8 @@ def test_load_artifacts_huggingface_requires_repo(tmp_path):
 
 def test_hf_dir_rejects_traversal_repo(tmp_path):
     with pytest.raises(RuntimeError):
-        hf.hf_dir(str(tmp_path), "../..", "sha")
+        hf.hf_dir(str(tmp_path), "../../..", "sha")  # escapes the cache root
     with pytest.raises(RuntimeError):
-        hf.apply_hf_retention(str(tmp_path), "../escape", set())
+        hf.apply_hf_retention(str(tmp_path), "../../outside", set())  # would rmtree outside root
     # a normal repo dir is contained
     assert hf.hf_dir(str(tmp_path), "org/model", "abc123") == tmp_path / "hf" / "org" / "model" / "abc123"
