@@ -26,8 +26,16 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
             raise RuntimeError(f"refusing redirect to non-http scheme: {parsed.scheme!r}")
         safe_url(newurl)  # raises RuntimeError on non-allowlisted host
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new_req is not None and parsed.hostname != urllib.parse.urlparse(req.full_url).hostname:
-            new_req.remove_header("Authorization")
+        if new_req is not None:
+            old = urllib.parse.urlparse(req.full_url)
+            same_origin = (
+                parsed.scheme == (old.scheme or "https")
+                and (parsed.hostname or "").lower() == (old.hostname or "").lower()
+                and (parsed.port or (443 if parsed.scheme == "https" else 80))
+                == (old.port or (443 if (old.scheme or "https") == "https" else 80))
+            )
+            if not same_origin:
+                new_req.remove_header("Authorization")
         return new_req
 
 

@@ -174,9 +174,17 @@ def _same_origin_url(base: str, location: str) -> str:
         return f"{base.rstrip('/')}{location if location.startswith('/') else '/' + location}"
     parsed = urllib.parse.urlparse(location)
     base_parsed = urllib.parse.urlparse(base)
-    if (parsed.hostname or "") != (base_parsed.hostname or "") or parsed.scheme != base_parsed.scheme:
+    if _origin(parsed) != _origin(base_parsed):
         raise RuntimeError(f"refusing cross-origin upload Location: {net.redact_url(location)!r}")
     return location
+
+
+def _origin(parsed) -> tuple:
+    """Origin = scheme + host + EFFECTIVE port (default per scheme) — a scheme
+    or port change is a different origin and must not receive credentials."""
+    scheme = parsed.scheme or "https"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return (scheme, (parsed.hostname or "").lower(), port)
 
 
 def _push_blob(base: str, repo: str, digest: str, file: Path, auth: str, timeout: int) -> None:

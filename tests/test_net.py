@@ -55,7 +55,11 @@ def test_redirect_strips_authorization_cross_host():
     assert r is not None and r.get_header("Authorization") is None  # token never crosses hosts
     req2 = urllib.request.Request("https://huggingface.co/a", headers={"Authorization": "Bearer secret"})
     r2 = handler.redirect_request(req2, None, 302, "Found", {}, "https://huggingface.co/b")
-    assert r2.get_header("Authorization") == "Bearer secret"  # same host keeps it
+    assert r2.get_header("Authorization") == "Bearer secret"  # same origin keeps it
+    # same host, different port = different origin -> strip
+    req3 = urllib.request.Request("https://huggingface.co/a", headers={"Authorization": "Bearer secret"})
+    r3 = handler.redirect_request(req3, None, 302, "Found", {}, "https://huggingface.co:8443/b")
+    assert r3.get_header("Authorization") is None
 
 
 def test_redact_url_strips_query_and_fragment():
@@ -78,4 +82,9 @@ def test_same_origin_upload_location():
     with pytest.raises(RuntimeError):
         docker_source._same_origin_url(base, "https://registry.lan:5000/upload")  # scheme change
     with pytest.raises(RuntimeError):
+        docker_source._same_origin_url(base, "http://registry.lan:9999/upload")  # port change = different origin
+    with pytest.raises(RuntimeError):
         docker_source._same_origin_url(base, "")
+    # same origin with default port spelled out explicitly is fine
+    assert docker_source._same_origin_url("https://registry.lan", "https://registry.lan:443/x") == \
+        "https://registry.lan:443/x"
