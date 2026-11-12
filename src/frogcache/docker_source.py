@@ -161,14 +161,33 @@ def _pull_push_image(config: Config, spec: ArtifactSpec, release: UpstreamReleas
 _stream_to = net.stream_to
 
 
+def _same_origin_url(base: str, location: str) -> str:
+    """Resolve a registry Location header against base, requiring the SAME host.
+
+    The Location is registry-controlled; following it cross-origin would send
+    our private-registry credentials to another host. Relative Locations are
+    resolved against base (same origin by construction).
+    """
+    if not location:
+        raise RuntimeError("registry returned no upload Location")
+    if not location.startswith("http"):
+        return f"{base.rstrip('/')}{location if location.startswith('/') else '/' + location}"
+    parsed = urllib.parse.urlparse(location)
+    base_parsed = urllib.parse.urlparse(base)
+    if (parsed.hostname or "") != (base_parsed.hostname or "") or parsed.scheme != base_parsed.scheme:
+        raise RuntimeError(f"refusing cross-origin upload Location: {net.redact_url(location)!r}")
+    return location
+
+
 def _push_blob(base: str, repo: str, digest: str, file: Path, auth: str, timeout: int) -> None:
     """Upload one verified blob to the private registry (PUT, then monolithic upload)."""
     status, headers, _ = _request(f"{base}/v2/{repo}/blobs/uploads/", method="POST", headers={"Authorization": auth}, timeout=timeout)
     if status != 202:
         raise RuntimeError(f"blob upload init -> HTTP {status}")
-    location = headers.get("Location", "")  # carries the upload URL
-    sep = "&" if "?" in location else "?"
-    status, _, _ = _request(f"{location}{sep}digest={digest}", method="PUT",
+    location = net.header(headers, "Location")  # carries the upload URL
+    upload_url = _same_origin_url(base, location)  # never follow a cross-origin Location with our credentials
+    sep = "&" if "?" in upload_url else "?"
+    status, _, _ = _request(f"{upload_url}{sep}digest={digest}", method="PUT",
                            headers={"Authorization": auth, "Content-Type": "application/octet-stream"},
                            data=file.read_bytes(), timeout=timeout)
     if status not in (200, 201, 202):
@@ -270,6 +289,10 @@ def _push_blob_stream(base: str, repo: str, digest: str, file: Path, auth: str, 
         raise RuntimeError(f"blob upload init -> HTTP {resp.status}")
     location = net.header(dict(resp.getheaders()), "Location")
     upload_url = urllib.parse.urlparse(location if location.startswith("http") else f"{base}{location}")
+    # cross-origin check: the upload must stay on the private registry's own
+    # host — a Location pointing anywhere else would receive our Basic auth
+    if (upload_url.hostname or "") != (parsed.hostname or ""):
+        raise RuntimeError(f"refusing cross-origin blob upload Location host: {upload_url.hostname!r}")
     # preserve the upload session query state (_state=...) and add the digest
     query = urllib.parse.parse_qsl(upload_url.query, keep_blank_values=True)
     query.append(("digest", digest))

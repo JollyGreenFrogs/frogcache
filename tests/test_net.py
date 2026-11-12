@@ -63,3 +63,19 @@ def test_redact_url_strips_query_and_fragment():
         "https://objects.githubusercontent.com/a"
     assert net.redact_url("https://huggingface.co/a/b/resolve/main/f?cursor=abc") == \
         "https://huggingface.co/a/b/resolve/main/f"
+
+
+def test_same_origin_upload_location():
+    from frogcache import docker_source
+
+    base = "http://registry.lan:5000"
+    assert docker_source._same_origin_url(base, "/v2/x/blobs/uploads/abc?_state=1") == \
+        "http://registry.lan:5000/v2/x/blobs/uploads/abc?_state=1"
+    assert docker_source._same_origin_url(base, "http://registry.lan:5000/v2/x/blobs/uploads/abc") == \
+        "http://registry.lan:5000/v2/x/blobs/uploads/abc"
+    with pytest.raises(RuntimeError):
+        docker_source._same_origin_url(base, "http://evil.example.com/upload")
+    with pytest.raises(RuntimeError):
+        docker_source._same_origin_url(base, "https://registry.lan:5000/upload")  # scheme change
+    with pytest.raises(RuntimeError):
+        docker_source._same_origin_url(base, "")

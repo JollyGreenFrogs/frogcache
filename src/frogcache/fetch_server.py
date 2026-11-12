@@ -44,7 +44,7 @@ def infer_spec_from_path(path: str) -> ArtifactSpec | None:
     """
     if path.startswith("hf/"):
         parts = path.split("/")
-        if len(parts) >= 3 and parts[1] and parts[2]:
+        if len(parts) >= 3 and all(p not in ("", ".", "..") for p in parts[1:3]):
             return ArtifactSpec(
                 name=f"{parts[1]}/{parts[2]}",
                 source=SourceSpec(type="huggingface", repo=f"{parts[1]}/{parts[2]}"),
@@ -108,9 +108,14 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 # fetch the EXACT requested file, not the latest release; the
                 # retention lock is held across promote+record+prune so the
-                # updater can never prune the in-flight file mid-fetch
+                # updater can never prune the in-flight file mid-fetch, and a
+                # concurrent request for the same file re-checks existence
+                # inside the lock instead of downloading twice
                 with cache.retention_lock(self.config.cache_dir):
-                    promoted = pipeline.fetch_exact_file(self.config, path, spec, conn)
+                    if target.is_file():
+                        promoted = target  # another request promoted it while we waited
+                    else:
+                        promoted = pipeline.fetch_exact_file(self.config, path, spec, conn)
             except (RuntimeError, ValueError) as err:
                 audit.log_event(conn, "verify_fail", spec.name, error=str(err)[:200])
                 notify_safe(self.config, "frogcache: pull-through FAILED",
