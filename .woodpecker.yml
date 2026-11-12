@@ -26,12 +26,15 @@ steps:
     image: docker:cli
     when:
       event: push
-      branch: main
+      branch: [main, develop]   # main -> prod image (latest), develop -> UAT image (uat)
     environment:
       REGISTRY: { from_secret: docker_registry }
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
-      - docker build -t $REGISTRY/frogcache/updater:latest -t $REGISTRY/frogcache/updater:${CI_COMMIT_SHA:0:8} .
-      - docker push $REGISTRY/frogcache/updater:latest
+      - docker build -t $REGISTRY/frogcache/updater:${CI_COMMIT_SHA:0:8} .
       - docker push $REGISTRY/frogcache/updater:${CI_COMMIT_SHA:0:8}
+      - |
+        if [ "$CI_COMMIT_BRANCH" = "main" ]; then TAG=latest; else TAG=uat; fi
+        docker tag $REGISTRY/frogcache/updater:${CI_COMMIT_SHA:0:8} $REGISTRY/frogcache/updater:$TAG
+        docker push $REGISTRY/frogcache/updater:$TAG
