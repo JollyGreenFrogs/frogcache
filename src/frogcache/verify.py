@@ -197,7 +197,7 @@ def verify_and_promote(
     # copy to a hidden temp ON THE DESTINATION filesystem, re-verify, then
     # atomically replace — consumers never see a partial file (cross-fs move
     # would copy directly into the served directory)
-    tmp = dest.parent / f".{dest.name}.{uuid.uuid4().hex}.part"
+    tmp = safe_join(str(dest.parent), f".{dest.name}.{uuid.uuid4().hex}.part")
     try:
         shutil.copyfile(part, tmp)
         if sha256_file(tmp) != digest:

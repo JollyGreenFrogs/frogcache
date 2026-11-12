@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 from frogcache import cache, hf, manifest
 from frogcache.data_models.artifact import ArtifactSpec, SourceSpec
 
@@ -221,3 +223,12 @@ def test_load_artifacts_huggingface_requires_repo(tmp_path):
     path.write_text(json.dumps({"artifacts": [{"name": "x", "source": {"type": "huggingface"}}]}))
     with pytest.raises(ValueError):
         upstream.load_artifacts(str(path))
+
+
+def test_hf_dir_rejects_traversal_repo(tmp_path):
+    with pytest.raises(RuntimeError):
+        hf.hf_dir(str(tmp_path), "../..", "sha")
+    with pytest.raises(RuntimeError):
+        hf.apply_hf_retention(str(tmp_path), "../escape", set())
+    # a normal repo dir is contained
+    assert hf.hf_dir(str(tmp_path), "org/model", "abc123") == tmp_path / "hf" / "org" / "model" / "abc123"

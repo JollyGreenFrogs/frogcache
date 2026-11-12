@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from frogcache.cache import safe_join
 from frogcache.data_models.artifact import ArtifactSpec, UpstreamRelease
 from frogcache.net import SAFE_OPENER, checked_url, fetch_json, redact_url
 
@@ -114,8 +115,12 @@ def latest_hf_release(spec: ArtifactSpec, timeout: int = 60) -> UpstreamRelease 
 
 
 def hf_dir(cache_dir: str, repo: str, version: str) -> Path:
-    """Directory holding one revision of a HF model: <cache_dir>/hf/<repo>/<version>."""
-    return Path(cache_dir) / "hf" / repo / version
+    """Directory holding one revision of a HF model: <cache_dir>/hf/<repo>/<version>.
+
+    Built via safe_join so a repo/version containing traversal segments raises
+    instead of escaping the cache root (repo comes from artifacts.json).
+    """
+    return safe_join(cache_dir, f"hf/{repo}/{version}")
 
 
 def cached_hf_versions(cache_dir: str, repo: str) -> list[str]:
@@ -127,7 +132,7 @@ def cached_hf_versions(cache_dir: str, repo: str) -> list[str]:
     Returns:
         Revision shas, newest first; empty if none cached.
     """
-    base = Path(cache_dir) / "hf" / repo
+    base = safe_join(cache_dir, f"hf/{repo}")
     if not base.is_dir():
         return []
     return sorted(
@@ -152,7 +157,7 @@ def apply_hf_retention(cache_dir: str, repo: str, keep_versions: set[str]) -> li
         Revision shas that were removed.
     """
     removed = []
-    base = Path(cache_dir) / "hf" / repo
+    base = safe_join(cache_dir, f"hf/{repo}")  # containment: repo must not escape cache root
     if not base.is_dir():
         return removed
     for path in base.iterdir():
