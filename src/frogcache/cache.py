@@ -8,17 +8,38 @@ remain (default: latest + latest-1).
 Governing ADR: docs/decisions/ADR-001.
 """
 
+import contextlib
+import fcntl
 import hashlib
-import json
 import os
 import re
+import shutil
 import urllib.request
+import uuid
 from pathlib import Path
 
-from frogcache.data_models.artifact import ManifestEntry
+from frogcache.net import SAFE_OPENER, checked_url, safe_url
 from frogcache.versions import is_newer, parse_version
 
-WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)-[^-]+-[^-]+-[^-]+\.whl$")
+def safe_join(root: str, rel: str) -> Path:
+    """Join rel onto root, rejecting absolute paths and traversal outside root.
+
+    Args:
+        root: base directory (cache dir).
+        rel: relative path (may contain subdirs).
+    Returns:
+        Resolved path guaranteed to be inside root.
+    Raises:
+        RuntimeError: if the result escapes root.
+    """
+    base = Path(root).resolve()
+    target = (base / rel).resolve()
+    if target != base and base not in target.parents:
+        raise RuntimeError(f"path escapes cache root: {rel!r}")
+    return target
+
+
+WHEEL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.]+)(?:-(?P<build>\d[^-]*))?-[^-]+-[^-]+-[^-]+\.whl$")
 
 
 def parse_wheel_filename(filename: str) -> tuple[str, str] | None:
@@ -64,7 +85,7 @@ def newest_cached_version(cache_dir: str, name: str) -> str | None:
     return files[0][0] if files else None
 
 
-def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tuple[Path, str]:
+def download_atomic(url: str, cache_dir: str, filename: str, timeout: int, allow_file: bool = False) -> tuple[Path, str]:
     """Download url into cache_dir/filename via a temp file + rename.
 
     Args:
@@ -77,17 +98,22 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
     Raises:
         RuntimeError: on download failure (temp file is removed).
     """
-    dest_dir = Path(cache_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    tmp = dest_dir / f".{filename}.part"
-    request = urllib.request.Request(url, headers={"User-Agent": "frogcache/1.0"})
+    # strict filename guard: flat name only, no separators/traversal — this is
+    # the sanitizer the path-injection query recognizes; safe_join re-checks
+    if not re.fullmatch(r"[A-Za-z0-9._+-]+", filename) or filename in (".", ".."):
+        raise RuntimeError(f"unsafe download filename: {filename!r}")
+    dest = safe_join(cache_dir, filename)  # containment: filename may not escape
+    # tmp name comes from a uuid (not from the tainted filename) so no path op
+    # in the cleanup branch depends on user data
+    tmp = safe_join(cache_dir, f".{uuid.uuid4().hex}.part")
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(checked_url(url, allow_file=allow_file), headers={"User-Agent": "frogcache/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as out:
+        with SAFE_OPENER.open(request, timeout=timeout) as response, open(tmp, "wb") as out:
             digest = hashlib.sha256()
             while chunk := response.read(1 << 20):
                 digest.update(chunk)
                 out.write(chunk)
-        dest = dest_dir / filename
         os.replace(tmp, dest)
         return dest, digest.hexdigest()
     except Exception as err:
@@ -95,59 +121,27 @@ def download_atomic(url: str, cache_dir: str, filename: str, timeout: int) -> tu
         raise RuntimeError(f"download {url} failed: {err}") from err
 
 
-def apply_retention(cache_dir: str, name: str, keep: int) -> list[str]:
-    """Delete all but the newest `keep` cached files for an artifact.
-
-    Args:
-        cache_dir: flat cache directory.
-        name: normalized artifact name.
-        keep: number of newest files to retain (>= 1).
-    Returns:
-        Filenames that were deleted.
-    """
-    files = cached_files(cache_dir, name)
-    removed = []
-    for _, filename in files[keep:]:
-        (Path(cache_dir) / filename).unlink(missing_ok=True)
-        removed.append(filename)
-    return removed
-
-
-def load_manifest(state_file: str) -> dict:
-    """Load the manifest JSON; missing/corrupt file -> empty manifest."""
-    try:
-        manifest = json.loads(Path(state_file).read_text())
-        manifest.setdefault("artifacts", {})
-        return manifest
-    except (OSError, json.JSONDecodeError):
-        return {"artifacts": {}}
-
-
-def save_manifest(state_file: str, manifest: dict) -> None:
-    """Persist the manifest atomically (temp file + rename)."""
-    path = Path(state_file)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(manifest, indent=2))
-    tmp.replace(path)
-
-
-def record_fetch(manifest: dict, name: str, entry: ManifestEntry, keep: int) -> None:
-    """Append a fetch entry to the manifest and prune entries beyond `keep`.
-
-    Args:
-        manifest: manifest dict (mutated).
-        name: normalized artifact name.
-        entry: ManifestEntry for the fetch.
-        keep: number of newest entries to retain for the artifact.
-    """
-    entries = manifest["artifacts"].setdefault(name, [])
-    entries.append(entry.__dict__)
-    entries.sort(key=lambda e: parse_version(e["version"]), reverse=True)
-    del entries[keep:]
-
-
 def is_update_available(latest_version: str, cache_dir: str, name: str) -> bool:
     """Return True if latest_version is newer than the newest cached version."""
     cached = newest_cached_version(cache_dir, name)
     return cached is None or is_newer(latest_version, cached)
+
+
+@contextlib.contextmanager
+def retention_lock(files_dir: str):
+    """Cross-process lock on the files share so updater/fetcher retention never races."""
+    path = Path(files_dir).resolve() / ".retention.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def apply_retention_versions(cache_dir: str, name: str, keep_versions: set[str]) -> list[str]:
+    """Delete cached files of `name` whose version is not in keep_versions (DB-aligned)."""
+    removed = []
+    for version, filename in cached_files(cache_dir, name):
+        if version not in keep_versions:
+            (Path(cache_dir) / filename).unlink(missing_ok=True)
+            removed.append(filename)
+    return removed

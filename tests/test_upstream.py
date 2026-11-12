@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from frogcache import upstream
+from frogcache import sources, upstream
 from frogcache.data_models.artifact import ArtifactSpec, SourceSpec
 
 
@@ -35,7 +35,7 @@ def test_load_artifacts_rejects_bad_source(tmp_path):
 def test_latest_compat_release_picks_max_version(tmp_path, monkeypatch):
     compat = {"spacy": {"3.7": {"en_core_web_sm": ["3.7.0", "3.7.1"]},
                         "3.8": {"en_core_web_sm": ["3.8.0"]}}}
-    monkeypatch.setattr(upstream, "fetch_json", lambda url, token="", timeout=60: compat)
+    monkeypatch.setattr(sources, "fetch_json", lambda url, token="", timeout=60: compat)
     spec = ArtifactSpec(
         name="en-core-web-sm",
         source=SourceSpec(type="github-compat", repo="explosion/spacy-models",
@@ -59,7 +59,7 @@ def test_latest_pypi_release_prefers_wheel(monkeypatch):
              "filename": "pkg-1.2.3-py3-none-any.whl"},
         ]},
     }
-    monkeypatch.setattr(upstream, "fetch_json", lambda url, token="", timeout=60: data)
+    monkeypatch.setattr(sources, "fetch_json", lambda url, token="", timeout=60: data)
     spec = ArtifactSpec(name="pkg", source=SourceSpec(type="pypi"))
     release = upstream.latest_release(spec, timeout=30)
     assert release.filename == "pkg-1.2.3-py3-none-any.whl"
@@ -69,6 +69,6 @@ def test_latest_pypi_release_404_returns_none(monkeypatch):
     def fake_fetch(url, token="", timeout=60):
         raise RuntimeError(f"GET {url} -> HTTP 404")
 
-    monkeypatch.setattr(upstream, "fetch_json", fake_fetch)
+    monkeypatch.setattr(sources, "fetch_json", fake_fetch)
     spec = ArtifactSpec(name="en-core-web-sm", source=SourceSpec(type="pypi"))
     assert upstream.latest_release(spec, timeout=30) is None

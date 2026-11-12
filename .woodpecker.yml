@@ -5,12 +5,21 @@
 when:
   event: [push, pull_request]
 
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: frogcache
+      POSTGRES_PASSWORD: frogcache
+      POSTGRES_DB: frogcache_test
+
 steps:
   - name: test
-    image: python:3.13-alpine
+    image: python:3.15-alpine
     commands:
-      - pip install --quiet pytest
+      - pip install --quiet pytest "psycopg[binary]" alembic sqlalchemy
       - python -m compileall -q src tests
+      - export DATABASE_URL=postgresql://frogcache:frogcache@postgres:5432/frogcache_test
       - PYTHONPATH=src python -m pytest -q
 
   - name: docker-build-push

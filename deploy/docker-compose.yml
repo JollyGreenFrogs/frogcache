@@ -1,17 +1,21 @@
-# frogcache — self-hosted LAN artifact cache with weekly auto-update.
+# frogcache — self-hosted LAN artifact cache with weekly auto-update + pull-through.
 #
-#   cache    nginx autoindex over the frogcache-files volume  -> http://<cache-host>:8091/
-#   updater  frogcache image (built by Woodpecker, pushed to your registry):
-#            weekly checks upstream per seed artifact, downloads newer versions
-#            into frogcache-files, retains latest + latest-1 (RETAIN=2), ntfy notify.
+#   cache    nginx autoindex over the files share  -> http://<cache-host>:8091/
+#            (404s proxy to the fetcher for pull-through auto-add, ADR-003 §A)
+#   updater  weekly checks upstream per artifact; downloads go to the air-gapped
+#            sandbox volume FIRST, are verified (digest+ClamAV+format), then
+#            promoted to the files share (ADR-003 §D); retains latest+latest-1.
+#   fetcher  pull-through server on loopback:8092 (ADR-003 §A); appends auto specs
+#            to artifacts.json so the weekly loop manages them from then on.
 #
-# PORT NOTE: 8090 is commonly taken on the host (e.g. by ntfy), hence 8091.
+# STORAGE (ADR-003 §C): all real data lives on real shares on the LAN data server
+# (DATA_SHARE, SMB/NFS mounted on the docker host), bind-mounted below — backed
+# up and redundant. The ONLY named volume is frogcache-sandbox: the air-gapped
+# staging area for unverified downloads, mounted into updater+fetcher only.
 #
 # NO-SSH RULE: deploy/operate ONLY via `docker --context <name> ...` (deploy.sh).
-# No host bind paths — everything lives in named volumes.
-# UPDATER_IMAGE is required (no default): set it to your registry image.
 #
-# Governing ADR: docs/decisions/ADR-001-frogcache.md (in this repo).
+# Governing ADRs: docs/decisions/ADR-001/002/003/004 (in this repo).
 services:
   cache:
     image: nginx:alpine
@@ -19,10 +23,11 @@ services:
     restart: unless-stopped
     network_mode: host          # serves on the host LAN IP: http://<cache-host>:8091/
     volumes:
-      - frogcache-files:/usr/share/nginx/html:ro
+      - ${DATA_SHARE:-/mnt/frogcache}/files:/usr/share/nginx/html:ro
     command: >
-      sh -c "printf 'server { listen 8091; root /usr/share/nginx/html; autoindex on; }' > /etc/nginx/conf.d/default.conf
-      && nginx -g 'daemon off;'"
+      sh -c "printf 'server { listen 8091; root /usr/share/nginx/html; autoindex on;
+              error_page 404 = @fetch; location @fetch { proxy_pass http://127.0.0.1:8092; proxy_read_timeout 900s; proxy_send_timeout 900s; } }' > /etc/nginx/conf.d/default.conf
+              && nginx -g 'daemon off;'"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8091/"]
       interval: 30s
@@ -37,15 +42,18 @@ services:
       cache:
         condition: service_healthy
     volumes:
-      - frogcache-files:/cache
-      - frogcache-artifacts:/artifacts:ro
-      - frogcache-data:/data
-      - frogcache-secrets:/run/secrets:ro
+      - ${DATA_SHARE:-/mnt/frogcache}/files:/cache
+      - ${DATA_SHARE:-/mnt/frogcache}/artifacts:/artifacts
+      - ${DATA_SHARE:-/mnt/frogcache}/data:/data
+      - ${DATA_SHARE:-/mnt/frogcache}/secrets:/run/secrets:ro
+      - frogcache-sandbox:/sandbox
     environment:
       CACHE_DIR: /cache
       ARTIFACTS_FILE: /artifacts/artifacts.json
-      STATE_FILE: /data/manifest.json
+      STATE_FILE: /data/manifest.json   # legacy manifest, imported once into Postgres
       SECRETS_FILE: /run/secrets/frogcache.env
+      SANDBOX_DIR: /sandbox
+      QUARANTINE_DIR: /sandbox/quarantine
       CHECK_INTERVAL_SECONDS: "604800"   # weekly
       RETAIN: "2"                        # latest + latest-1
     logging:
@@ -54,8 +62,26 @@ services:
         max-size: "5m"
         max-file: "2"
 
+  fetcher:
+    image: ${UPDATER_IMAGE:?set UPDATER_IMAGE to your registry image, e.g. <registry>/frogcache/updater:latest}
+    container_name: frogcache-fetcher
+    restart: unless-stopped
+    network_mode: host                  # nginx proxies 404s to 127.0.0.1:8092
+    command: ["sh", "-c", "(while true; do freshclam --quiet || true; sleep 86400; done) & exec python -m frogcache --fetch-server"]
+    volumes:
+      - ${DATA_SHARE:-/mnt/frogcache}/files:/cache
+      - ${DATA_SHARE:-/mnt/frogcache}/artifacts:/artifacts
+      - ${DATA_SHARE:-/mnt/frogcache}/data:/data
+      - ${DATA_SHARE:-/mnt/frogcache}/secrets:/run/secrets:ro
+      - frogcache-sandbox:/sandbox
+    environment:
+      CACHE_DIR: /cache
+      ARTIFACTS_FILE: /artifacts/artifacts.json
+      STATE_FILE: /data/manifest.json   # legacy manifest, imported once into Postgres
+      SECRETS_FILE: /run/secrets/frogcache.env
+      SANDBOX_DIR: /sandbox
+      QUARANTINE_DIR: /sandbox/quarantine
+      HTTP_TIMEOUT: "120"
+
 volumes:
-  frogcache-files:
-  frogcache-artifacts:
-  frogcache-data:
-  frogcache-secrets:
+  frogcache-sandbox:   # air-gapped staging only — never on the data share, never backed up

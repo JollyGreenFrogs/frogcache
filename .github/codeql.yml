@@ -1,0 +1,9 @@
+# CodeQL configuration for frogcache.
+# py/partial-ssrf and py/path-injection are mitigated in code, not by config:
+#   - net.safe_url rebuilds every outbound URL with an https + host allowlist
+#     (pypi.org, github.com, huggingface.co, docker.io, + REGISTRY_ADDR)
+#   - cache.safe_join rejects absolute/traversal paths at every file destination
+# Alerts for those two rules are dismissed as mitigated; see PR #6.
+name: frogcache CodeQL
+queries:
+  - uses: security-extended

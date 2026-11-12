@@ -1,9 +1,8 @@
 # Coding Standards
 
 ## Scope & discoverability
-- This document is canonical in `<redacted-private-repo>` (`docs/coding-standards.md`); every other repo keeps a synced copy or links to it
-- Enterprise distribution: the org-wide copy lives in `<redacted-profile-repo>` (`coding-standards.md` + `copilot-instructions.md` template); each repo carries `docs/coding-standards.md` and `.github/copilot-instructions.md`, synced from there
-- Every repo's CONTRIBUTING/README links here; agents and humans read this doc before editing code in any repo
+- This document is this project's coding standard; keep it at `docs/coding-standards.md` and the agent instructions at `.github/copilot-instructions.md`
+- CONTRIBUTING and README link here; agents and humans read this doc before editing code
 
 ## Architecture Design Documents (ADRs / ADDs)
 - New flows/architecture get an **ADD before code** — one file per decision (`docs/architecture/ADR-NNN-title.md`), indexed in `decisions.md`. House format is the ADD style: Context → Design → Decision → Rejected Alternatives → Consequences; **Design comes before Decision**, and the file is a living doc that evolves as the build evolves
@@ -81,10 +80,6 @@
 ## CI
 - **Woodpecker only** (`.woodpecker.yml`): unit tests gate every push/PR; branch pushes deploy UAT/prod. Do **not** duplicate this in GitHub Actions — GitHub is for PRs + review bot only
 
-## Deployment
-- **Preferred and default method: CI/CD via Woodpecker** — merges to `develop` deploy UAT, merges to `main` deploy prod; no manual deploys from laptops
-- Never deploy from a feature branch (see Git / Commits); any out-of-band deploy needs explicit per-occurrence operator approval (see AI-assisted workflow)
-
 ## AI-assisted development workflow (Mistral Vibe / Copilot-style agents)
 - **Show code before writing it** — the operator reviews the exact diff first; no code lands without approval
 - **Material changes require explicit approval**; small review-comment fixes within an approved scope may proceed, and are listed in the summary so they can be vetoed
@@ -107,3 +102,4 @@
 - 12factor.net §III + OWASP cheat sheets — config/secrets in env or Vault, never in code/DB
 - Feathers, *Working Effectively with Legacy Code* (2004) — characterization tests
 - **House decisions with no external authority** (do not cite as external standards): the ~200-line file threshold, exception placement, the ADD status lifecycle, Woodpecker-only CI
+

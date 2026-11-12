@@ -1,14 +1,14 @@
 # All files — default owners
-* @JollyGreenFrogs
+* @JollyGreenFrogs/jgfgroup
 
 # Security-sensitive code: upstream fetching (SSRF surface), downloads/path
 # handling, and the ntfy token handling
-src/frogcache/upstream.py @JollyGreenFrogs
-src/frogcache/cache.py @JollyGreenFrogs
-src/frogcache/notify.py @JollyGreenFrogs
+src/frogcache/upstream.py @JollyGreenFrogs/jgfgroup
+src/frogcache/cache.py @JollyGreenFrogs/jgfgroup
+src/frogcache/notify.py @JollyGreenFrogs/jgfgroup
 
 # Deploy & CI / repo configuration
-deploy/ @JollyGreenFrogs
-Dockerfile @JollyGreenFrogs
-.woodpecker.yml @JollyGreenFrogs
-.github/ @JollyGreenFrogs
+deploy/ @JollyGreenFrogs/jgfgroup
+Dockerfile @JollyGreenFrogs/jgfgroup
+.woodpecker.yml @JollyGreenFrogs/jgfgroup
+.github/ @JollyGreenFrogs/jgfgroup

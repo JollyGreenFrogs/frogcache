@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 
 from frogcache.data_models.config import Config
+from frogcache.net import SAFE_OPENER, checked_url, redact_url
 
 
 def send_ntfy(config: Config, title: str, message: str, priority: str = "default") -> None:
@@ -26,7 +27,7 @@ def send_ntfy(config: Config, title: str, message: str, priority: str = "default
     if not config.ntfy_url or not config.ntfy_token:
         raise RuntimeError("NTFY_URL/NTFY_TOKEN not configured; cannot notify")
     request = urllib.request.Request(
-        config.ntfy_url,
+        checked_url(config.ntfy_url),
         data=message.encode(),
         headers={
             "Authorization": f"Bearer {config.ntfy_token}",
@@ -37,11 +38,13 @@ def send_ntfy(config: Config, title: str, message: str, priority: str = "default
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=config.http_timeout) as response:
+        # SAFE_OPENER re-validates redirects and strips Authorization cross-host,
+        # so the bearer token can never leak to a redirect target
+        with SAFE_OPENER.open(request, timeout=config.http_timeout) as response:
             if response.status >= 300:
-                raise RuntimeError(f"POST {config.ntfy_url} -> HTTP {response.status}")
+                raise RuntimeError(f"POST {redact_url(config.ntfy_url)} -> HTTP {response.status}")
     except urllib.error.URLError as err:
-        raise RuntimeError(f"POST {config.ntfy_url} failed: {err}") from err
+        raise RuntimeError(f"POST {redact_url(config.ntfy_url)} failed: {err}") from err
 
 
 def notify_safe(config: Config, title: str, message: str, priority: str = "default") -> None:

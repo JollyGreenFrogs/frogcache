@@ -10,8 +10,9 @@ import os
 from pathlib import Path
 
 from frogcache.data_models.config import Config
+from frogcache import net
 
-SECRET_KEYS = ("NTFY_URL", "NTFY_TOKEN", "GITHUB_TOKEN")
+SECRET_KEYS = ("NTFY_URL", "NTFY_TOKEN", "GITHUB_TOKEN", "REGISTRY_USER", "REGISTRY_PASS", "DATABASE_URL")
 
 
 def read_secrets_file(path: str) -> dict[str, str]:
@@ -50,7 +51,11 @@ def load_config() -> Config:
     config = Config(
         cache_dir=os.environ.get("CACHE_DIR", "/cache"),
         artifacts_file=os.environ.get("ARTIFACTS_FILE", "/artifacts/artifacts.json"),
-        state_file=os.environ.get("STATE_FILE", "/data/manifest.json"),
+        database_url=secret("DATABASE_URL"),
+        registry_addr=secret("REGISTRY_ADDR"),
+        registry_user=secret("REGISTRY_USER"),
+        registry_pass=secret("REGISTRY_PASS"),
+        legacy_state_file=os.environ.get("STATE_FILE", "/data/manifest.json"),
         secrets_file=os.environ.get("SECRETS_FILE", "/run/secrets/frogcache.env"),
         check_interval_seconds=int(os.environ.get("CHECK_INTERVAL_SECONDS", "604800")),
         retain=int(os.environ.get("RETAIN", "2")),
@@ -58,6 +63,18 @@ def load_config() -> Config:
         ntfy_url=secret("NTFY_URL"),
         ntfy_token=secret("NTFY_TOKEN"),
         github_token=secret("GITHUB_TOKEN"),
+        sandbox_dir=os.environ.get("SANDBOX_DIR", "/sandbox"),
+        quarantine_dir=os.environ.get("QUARANTINE_DIR", "/sandbox/quarantine"),
     )
     config.validate()
+    if config.registry_addr:
+        import urllib.parse
+
+        host = urllib.parse.urlparse(config.registry_addr).hostname
+        net.register_extra_host(host)
+        net.set_registry_host(host)
+    if config.ntfy_url:
+        import urllib.parse
+
+        net.register_http_host(urllib.parse.urlparse(config.ntfy_url).hostname)
     return config
