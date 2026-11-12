@@ -13,12 +13,14 @@ import base64
 import hashlib
 import http.client
 import json
+import re
 import urllib.parse
 from datetime import datetime, timezone
 from frogcache import net
 from pathlib import Path
 
 from frogcache import audit, manifest, net, verify
+from frogcache.cache import safe_join as cache_safe_join
 
 
 def _extra_hosts(config) -> set[str]:
@@ -131,6 +133,8 @@ def _pull_push_image(config: Config, spec: ArtifactSpec, release: UpstreamReleas
     status, _, body = _request(digest_url, headers=headers, timeout=config.http_timeout)
     if status != 200:
         raise RuntimeError(f"pull manifest by digest -> HTTP {status}")
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", release.version):
+        raise RuntimeError("resolved manifest digest is not a sha256 digest")
     if hashlib.sha256(body).hexdigest() != release.version.split(":")[-1]:
         raise RuntimeError("manifest bytes do not match the resolved digest")
     doc = json.loads(body)
@@ -252,6 +256,8 @@ def _copy_descriptors(config, spec, release, doc, headers, base, repo, auth, con
     if "manifest.list" in media or "image.index" in media:
         for child in doc.get("manifests", []):
             child_digest = child["digest"]
+            if not re.fullmatch(r"sha256:[a-f0-9]{64}", child_digest):
+                raise RuntimeError(f"invalid child manifest digest: {str(child_digest)[:32]!r}")
             url = f"{spec.source.upstream_registry.rstrip('/')}/v2/{spec.source.image}/manifests/{child_digest}"
             status, _, cbody = _request(url, headers=headers, timeout=config.http_timeout)
             if status != 200 or hashlib.sha256(cbody).hexdigest() != child_digest.split(":")[-1]:
@@ -264,9 +270,13 @@ def _copy_descriptors(config, spec, release, doc, headers, base, repo, auth, con
         digest = desc.get("digest", "")
         if not digest:
             continue
+        # digest comes from the upstream manifest — it becomes a filename, so
+        # it must be a strict sha256 hex digest (no traversal/slashes)
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
+            raise RuntimeError(f"invalid blob digest format: {digest[:32]!r}")
         blob_url = f"{spec.source.upstream_registry.rstrip('/')}/v2/{spec.source.image}/blobs/{digest}"
-        staged = Path(config.sandbox_dir) / digest.replace(":", "_")
-        part = staged.with_suffix(".part")
+        staged = cache_safe_join(config.sandbox_dir, digest.replace(":", "_"))
+        part = cache_safe_join(config.sandbox_dir, digest.replace(":", "_") + ".part")
         net.stream_to(blob_url, part, headers, config.http_timeout)
         ok, _, verified = verify.verify_and_promote(
             part, staged, expected_sha256=digest.split(":")[-1],

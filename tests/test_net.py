@@ -88,3 +88,42 @@ def test_same_origin_upload_location():
     # same origin with default port spelled out explicitly is fine
     assert docker_source._same_origin_url("https://registry.lan", "https://registry.lan:443/x") == \
         "https://registry.lan:443/x"
+
+
+def test_blob_digest_format_validated():
+    # a traversal digest from a malicious manifest must be rejected before it
+    # becomes a sandbox filename
+    import hashlib
+
+    from frogcache import docker_source
+    from frogcache.data_models.artifact import ArtifactSpec, SourceSpec, UpstreamRelease
+    from frogcache.data_models.config import Config
+
+    config = Config(cache_dir="/tmp/c", artifacts_file="/tmp/a.json", database_url="x",
+                    secrets_file="", sandbox_dir="/tmp/sb", quarantine_dir="/tmp/q",
+                    retain=2, http_timeout=5, registry_addr="http://registry.lan:5000",
+                    registry_user="u", registry_pass="p")
+    spec = ArtifactSpec(name="x", source=SourceSpec(type="docker", image="a/b", tag="latest",
+                                                    upstream_registry="http://registry.lan:5000"))
+    bad_doc = {"mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+               "config": {"digest": "sha256:../../evil"}, "layers": []}
+    import json as jsonlib
+    body = jsonlib.dumps(bad_doc).encode()
+    release = UpstreamRelease(version="sha256:" + hashlib.sha256(body).hexdigest(), url="",
+                             filename="m", sha256="sha256:" + hashlib.sha256(body).hexdigest())
+    calls = []
+
+    def fake_request(url, method="GET", headers=None, data=None, timeout=60):
+        calls.append(url)
+        if url.endswith("/manifests/" + release.version):
+            return 200, {}, body
+        return 404, {}, b""
+
+    import frogcache.net as netmod
+    orig = docker_source._request
+    docker_source._request = fake_request
+    try:
+        with pytest.raises(RuntimeError, match="invalid blob digest"):
+            docker_source._pull_push_image(config, spec, release, conn=None)
+    finally:
+        docker_source._request = orig
