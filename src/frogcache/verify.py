@@ -156,7 +156,7 @@ def _quarantine(part: Path, quarantine: Path | None) -> None:
     """Move a failed download to quarantine (or delete if no quarantine dir)."""
     if quarantine is not None:
         quarantine.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(part), quarantine / part.name)
+        shutil.move(str(part), safe_join(str(quarantine), part.name))
     else:
         part.unlink(missing_ok=True)
 

@@ -87,10 +87,10 @@ def test_fetch_tree_pages_follows_link_next(monkeypatch):
         def __exit__(self, *args):
             return False
 
-    def fake_urlopen(request, timeout=60):
+    def fake_open(request, timeout=60):
         return FakeResponse(*pages[request.full_url])
 
-    monkeypatch.setattr(hf.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(hf.SAFE_OPENER, "open", fake_open)
     items = hf.fetch_tree_pages("https://huggingface.co/api/x/tree/sha?recursive=true", timeout=30)
     assert [i["path"] for i in items] == ["a.gguf", "b.gguf"]
 

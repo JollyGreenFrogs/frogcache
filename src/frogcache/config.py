@@ -73,4 +73,8 @@ def load_config() -> Config:
         host = urllib.parse.urlparse(config.registry_addr).hostname
         net.register_extra_host(host)
         net.set_registry_host(host)
+    if config.ntfy_url:
+        import urllib.parse
+
+        net.register_http_host(urllib.parse.urlparse(config.ntfy_url).hostname)
     return config

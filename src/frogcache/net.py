@@ -14,7 +14,9 @@ from pathlib import Path
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Re-validate every redirect target through safe_url — an allowlisted host
-    must not be able to redirect us to a non-allowlisted one."""
+    must not be able to redirect us to a non-allowlisted one — and strip the
+    Authorization header when the redirect crosses to a different host, so
+    bearer tokens are never leaked cross-host (urllib forwards them by default)."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parsed = urllib.parse.urlparse(newurl)
@@ -23,7 +25,10 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         if parsed.scheme not in ("https", "http"):
             raise RuntimeError(f"refusing redirect to non-http scheme: {parsed.scheme!r}")
         safe_url(newurl)  # raises RuntimeError on non-allowlisted host
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None and parsed.hostname != urllib.parse.urlparse(req.full_url).hostname:
+            new_req.remove_header("Authorization")
+        return new_req
 
 
 SAFE_OPENER = urllib.request.build_opener(_SafeRedirectHandler)
@@ -91,17 +96,26 @@ def register_extra_host(host: str | None) -> None:
 
 
 _REGISTRY_HOST: str | None = None
+_HTTP_OK_HOSTS: set[str] = set()  # LAN hosts allowed plain http (registry, ntfy)
 
 
 def set_registry_host(host: str | None) -> None:
     """Track the PRIVATE registry host separately from the general allowlist.
 
-    The private registry is the only host allowed plain http (LAN); upstream
-    registries registered via register_extra_host stay https-only.
+    The private registry is allowed plain http (LAN); upstream registries
+    registered via register_extra_host stay https-only.
     """
     global _REGISTRY_HOST
     if host:
         _REGISTRY_HOST = host
+        _HTTP_OK_HOSTS.add(host)
+
+
+def register_http_host(host: str | None) -> None:
+    """Allow a LAN service host (e.g. ntfy) over plain http AND in the allowlist."""
+    if host:
+        _HTTP_OK_HOSTS.add(host)
+        _EXTRA_HOSTS.add(host)
 
 
 def _configured_registry_host() -> str | None:
@@ -136,12 +150,12 @@ def safe_url(url: str, extra_hosts: set[str] | None = None, allow_file: bool = F
     allowed = ALLOWED_HOSTS | _EXTRA_HOSTS | (extra_hosts or set())
     if parsed.hostname not in allowed or parsed.scheme not in ("https", "http"):
         raise RuntimeError(f"refusing non-allowlisted URL host: {parsed.hostname!r}")
-    # plain http is allowed ONLY for the configured private registry, which is
-    # tracked separately (not an arbitrary registered host)
-    is_registry = parsed.hostname == _configured_registry_host()
-    if parsed.scheme == "http" and not is_registry:
-        raise RuntimeError(f"http only allowed for the private registry, not {parsed.hostname!r}")
-    scheme = parsed.scheme if is_registry else "https"  # registry may be plain http on the LAN
+    # plain http is allowed ONLY for registered LAN hosts (private registry,
+    # ntfy) — tracked separately, not for arbitrary registered hosts
+    is_lan = parsed.hostname in _HTTP_OK_HOSTS
+    if parsed.scheme == "http" and not is_lan:
+        raise RuntimeError(f"http only allowed for LAN services (registry/ntfy), not {parsed.hostname!r}")
+    scheme = parsed.scheme if is_lan else "https"  # LAN services may be plain http
     path = urllib.parse.quote(parsed.path, safe="/%")
     return urllib.parse.urlunparse((scheme, parsed.netloc, path, "", parsed.query, ""))
 

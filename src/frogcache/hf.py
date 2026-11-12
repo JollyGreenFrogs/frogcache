@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 
 from frogcache.data_models.artifact import ArtifactSpec, UpstreamRelease
-from frogcache.net import fetch_json
+from frogcache.net import SAFE_OPENER, checked_url, fetch_json, redact_url
 
 HF_API_MODEL_URL = "https://huggingface.co/api/models/{repo}"
 HF_API_TREE_URL = "https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true"
@@ -44,17 +44,19 @@ def fetch_tree_pages(url: str, timeout: int = 60) -> list:
     items: list = []
     next_url: str = url
     while next_url:
+        # next_url comes from the upstream Link header — re-validate host and
+        # redirects like any other request (never a raw urlopen)
         request = urllib.request.Request(
-            next_url, headers={"User-Agent": "frogcache/1.0", "Accept": "application/json"}
+            checked_url(next_url), headers={"User-Agent": "frogcache/1.0", "Accept": "application/json"}
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with SAFE_OPENER.open(request, timeout=timeout) as response:
                 items.extend(json.loads(response.read().decode()))
                 link = response.headers.get("Link", "")
         except urllib.error.HTTPError as err:
-            raise RuntimeError(f"GET {next_url} -> HTTP {err.code}") from err
+            raise RuntimeError(f"GET {redact_url(next_url)} -> HTTP {err.code}") from err
         except urllib.error.URLError as err:
-            raise RuntimeError(f"GET {next_url} failed: {err.reason}") from err
+            raise RuntimeError(f"GET {redact_url(next_url)} failed: {err.reason}") from err
         next_url = ""
         for part in link.split(","):
             if 'rel="next"' in part:

@@ -48,6 +48,16 @@ def test_file_scheme_rejected_by_default():
     assert net.safe_url("file:///tmp/x", allow_file=True) == "file:///tmp/x"
 
 
+def test_redirect_strips_authorization_cross_host():
+    handler = net._SafeRedirectHandler()
+    req = urllib.request.Request("https://huggingface.co/a", headers={"Authorization": "Bearer secret"})
+    r = handler.redirect_request(req, None, 302, "Found", {}, "https://api.github.com/x")
+    assert r is not None and r.get_header("Authorization") is None  # token never crosses hosts
+    req2 = urllib.request.Request("https://huggingface.co/a", headers={"Authorization": "Bearer secret"})
+    r2 = handler.redirect_request(req2, None, 302, "Found", {}, "https://huggingface.co/b")
+    assert r2.get_header("Authorization") == "Bearer secret"  # same host keeps it
+
+
 def test_redact_url_strips_query_and_fragment():
     assert net.redact_url("https://objects.githubusercontent.com/a?X-Amz-Signature=secret&x=1#f") == \
         "https://objects.githubusercontent.com/a"
