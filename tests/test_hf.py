@@ -232,3 +232,66 @@ def test_hf_dir_rejects_traversal_repo(tmp_path):
         hf.apply_hf_retention(str(tmp_path), "../../outside", set())  # would rmtree outside root
     # a normal repo dir is contained
     assert hf.hf_dir(str(tmp_path), "org/model", "abc123") == tmp_path / "hf" / "org" / "model" / "abc123"
+
+
+def test_hf_keep_set_uses_live_specs_not_stale_snapshot(tmp_path, db_conn, monkeypatch):
+    """A spec appended to artifacts.json mid-run (concurrent pull-through) must
+    still contribute its revision to the keep-set — otherwise the weekly prune
+    could delete the concurrently added revision while keeping an older one."""
+    import json as jsonlib
+
+    from frogcache import pipeline
+    from frogcache.data_models.config import Config
+
+    conn = db_conn
+    repo = "org/model"
+    # two specs track the same repo; the second exists only on disk (appended
+    # after run_once snapshotted all_specs — we pass all_specs=() to simulate)
+    artifacts_file = tmp_path / "artifacts.json"
+    artifacts_file.write_text(jsonlib.dumps({"artifacts": [
+        {"name": "m-main", "source": {"type": "huggingface", "repo": repo, "revision": "main"}},
+        {"name": "m-pinned", "source": {"type": "huggingface", "repo": repo, "revision": "v1"}},
+    ]}))
+    # the pinned spec's revision was recorded recently (the concurrent add)
+    manifest.record_fetch_multi(
+        conn, "m-pinned", "sha_pinned",
+        [(f"hf/{repo}/sha_pinned/a.gguf", "9" * 64, True)],
+        "huggingface", "2026-11-12T00:00:00+00:00",
+    )
+    # older revision of the main spec
+    manifest.record_fetch_multi(
+        conn, "m-main", "sha_old",
+        [(f"hf/{repo}/sha_old/a.gguf", "8" * 64, True)],
+        "huggingface", "2026-11-01T00:00:00+00:00",
+    )
+    # disk has both revision dirs
+    for sha in ("sha_pinned", "sha_old", "sha_new"):
+        d = hf.hf_dir(str(tmp_path), repo, sha)
+        d.mkdir(parents=True)
+        (d / "a.gguf").write_bytes(b"x")
+
+    release = hf.UpstreamRelease(
+        version="sha_new", url="", filename="",
+        files=(("a.gguf", "https://huggingface.co/x", "7" * 64),),
+    )
+    monkeypatch.setattr(pipeline.hf, "latest_hf_release", lambda spec, timeout=60: release)
+    monkeypatch.setattr(pipeline.hf, "revision_complete", lambda *a, **k: False)
+
+    def fake_stage(config, url, dest, expected, required):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"x")
+        return expected, True
+
+    monkeypatch.setattr(pipeline, "_stage_and_promote", fake_stage)
+    config = Config(
+        cache_dir=str(tmp_path), artifacts_file=str(artifacts_file),
+        database_url="postgresql://unused", secrets_file="", sandbox_dir=str(tmp_path / "sb"),
+        quarantine_dir=str(tmp_path / "q"), retain=2, http_timeout=30,
+    )
+    spec = ArtifactSpec(name="m-main", source=SourceSpec(type="huggingface", repo=repo, revision="main"))
+    # stale snapshot: only the main spec (as loaded at run start)
+    pipeline.check_hf_artifact(config, spec, conn, all_specs=[spec])
+    remaining = hf.cached_hf_versions(str(tmp_path), repo)
+    # keep-set must include the concurrently added sha_pinned (newest 2 by
+    # fetched_at: sha_pinned + sha_new); sha_old is pruned
+    assert sorted(remaining) == ["sha_new", "sha_pinned"], remaining

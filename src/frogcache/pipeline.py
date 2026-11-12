@@ -96,14 +96,23 @@ def check_hf_artifact(config: Config, spec, conn, all_specs=()) -> str:
         manifest.record_fetch_multi(conn, spec.name, release.version, downloaded,
                                     spec.source.type, datetime.now(timezone.utc).isoformat())
         # keep-set spans ALL artifacts tracking this repo — per-artifact pruning
-        # would delete another spec's revisions (e.g. main vs pinned tag)
+        # would delete another spec's revisions (e.g. main vs pinned tag).
+        # Reload the spec list INSIDE the lock: the run-start snapshot is stale
+        # once a pull-through appends an auto spec mid-run, and a concurrently
+        # added revision would then be omitted from the keep-set and deleted.
+        try:
+            live_specs = upstream.load_artifacts(config.artifacts_file)
+        except ValueError:
+            live_specs = list(all_specs)
+        if spec not in live_specs:
+            live_specs.append(spec)
         seen: dict[str, str] = {}  # version -> newest fetched_at across the repo
-        for other in all_specs or [spec]:
+        for other in live_specs:
             if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
                 for e in manifest.entries(conn, other.name):
                     seen[e["version"]] = max(seen.get(e["version"], ""), e["fetched_at"])
         kept = set(sorted(seen, key=lambda v: seen[v], reverse=True)[: config.retain])
-        for other in all_specs or [spec]:
+        for other in live_specs:
             if other.source.type == "huggingface" and other.source.repo == spec.source.repo:
                 manifest.prune_versions(conn, other.name, kept)
         removed = hf.apply_hf_retention(config.cache_dir, spec.source.repo, kept | {release.version})
